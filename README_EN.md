@@ -82,10 +82,9 @@ Not in this version. Signing out stops further platform synchronization but does
 
 - Latest version: [GitHub Releases](https://github.com/Yaro-lu/LingJingAI/releases/latest)
 - Current client version: `1.0.2`
-- This project is publicly available as a non-commercial release, but no open-source license is currently granted.
 - It may be used only for learning, testing, and evaluation. Models and third-party components remain subject to their own licenses.
 - See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for major bundled components and license notices.
-- The installer is not commercially Authenticode-signed. Download it only from this repository's Releases page and verify the SHA-256 digest shown by GitHub.
+
 
 ---
 
