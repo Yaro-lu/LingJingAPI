@@ -82,10 +82,9 @@
 
 - 最新版本：[GitHub Releases](https://github.com/Yaro-lu/LingJingAI/releases/latest)
 - 当前版本：`1.0.2`
-- 本项目为公开、非商业发布，但目前没有授予开源许可证。
 - 仅可用于学习、测试与评估；模型和第三方组件还需分别遵守其自身许可证。
 - 主要第三方组件及许可证提示见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-- 安装程序尚未使用商业 Authenticode 证书签名，请只从本仓库 Release 下载并核对 GitHub 显示的 SHA-256 digest。
+
 
 ---
 
