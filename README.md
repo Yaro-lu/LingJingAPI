@@ -2,7 +2,7 @@
 
 # 灵境造片厂
 
-**把自己的 Windows 电脑变成一台本地 AI 创作站。**
+**Windows local AI studio & ComfyUI API：一键管理工作流和模型，通过 URL + API Key 调用文字、图片与视频生成。**
 
 灵境造片厂面向希望简单使用本地 AI 的创作者和普通用户。把comfyUI 工作流导入进去，可以提供一个API接口供其他项目用，不需要先学习 ComfyUI。
 
