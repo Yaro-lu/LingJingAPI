@@ -27,9 +27,11 @@ class ConsoleServiceTests(unittest.TestCase):
         app._poll_run = False
         app._ensure_health_polling = mock.Mock()
         app._tunnel_url = ""
+        app._local_url = main_gateway.API_BASE
         app._api_key = "sk-local-test"
         app._initial_session_sync_done = False
         app._set_public_url = mock.Mock()
+        app._set_local_url = mock.Mock()
         app.after = lambda _delay, callback: callback()
         return app
 
@@ -603,11 +605,31 @@ class ConsoleServiceTests(unittest.TestCase):
 
         self.assertEqual(app._api_key, "sk-local-memory-fallback")
 
-    def test_offline_tunnel_clears_stale_public_url(self):
+    def test_health_status_adopts_reported_local_api(self):
+        app = self._app()
+        app._server_mode = "guest"
+        app._server_session_token = ""
+        app._comfy_proc = None
+        app._comfy_starting_until = 0
+
+        app._update_status(
+            {
+                "base_url": "",
+                "local_api": "http://127.0.0.1:19001",
+                "tunnel": {"status": "starting"},
+                "comfyui": {"status": "online"},
+            }
+        )
+
+        app._set_local_url.assert_called_once_with("http://127.0.0.1:19001")
+
+    def test_offline_tunnel_clears_stale_public_url_but_preserves_local_api(self):
         app = self._app()
         app._tunnel_url = "https://stale.example"
+        app._local_url = "http://127.0.0.1:19001"
         app._initial_session_sync_done = True
         app._set_public_url = mock.Mock()
+        app._set_local_url = mock.Mock()
         app._server_mode = "guest"
         app._server_session_token = ""
         app._api_key = ""
@@ -617,6 +639,7 @@ class ConsoleServiceTests(unittest.TestCase):
         app._update_status(
             {
                 "base_url": "https://stale.example",
+                "local_api": "http://127.0.0.1:19001",
                 "tunnel": {"status": "offline"},
                 "comfyui": {"status": "online"},
             }
@@ -624,6 +647,8 @@ class ConsoleServiceTests(unittest.TestCase):
 
         self.assertEqual(app._tunnel_url, "")
         app._set_public_url.assert_called_once_with("")
+        app._set_local_url.assert_called_once_with("http://127.0.0.1:19001")
+        self.assertNotIn(mock.call(""), app._set_local_url.call_args_list)
         self.assertIn(
             mock.call("tunnel", "offline", "未连接"),
             app._set_light.call_args_list,

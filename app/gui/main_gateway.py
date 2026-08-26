@@ -59,7 +59,6 @@ from app.core.runtime_package import (  # noqa: E402
     REQUIRED_RUNTIME_PATHS,
     RUNTIME_PACKAGE_NAME,
     RUNTIME_PACKAGE_SIZE,
-    RUNTIME_HOMEPAGE_URL,
     SevenZipProgressParser,
     archive_extract_command,
     archive_list_command,
@@ -121,7 +120,57 @@ from app.workflow_registry import (  # noqa: E402
 
 _INSTANCE_LOCK_HANDLE = None
 CTK_AVAILABLE = ctk is not None
-PROJECT_HOMEPAGE_URL = RUNTIME_HOMEPAGE_URL
+PROJECT_REPOSITORY = "Yaro-lu/LingJingAPI"
+PROJECT_HOMEPAGE_URL = f"https://github.com/{PROJECT_REPOSITORY}"
+PROJECT_RELEASES_URL = f"{PROJECT_HOMEPAGE_URL}/releases/latest"
+PROJECT_LATEST_RELEASE_API_URL = (
+    f"https://api.github.com/repos/{PROJECT_REPOSITORY}/releases/latest"
+)
+MAX_RELEASE_METADATA_BYTES = 64 * 1024
+
+
+def _release_version_tuple(value: str):
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(value or "").strip())
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def _is_newer_release(current_version: str, latest_version: str) -> bool:
+    current = _release_version_tuple(current_version)
+    latest = _release_version_tuple(latest_version)
+    return bool(current and latest and latest > current)
+
+
+def _fetch_latest_release_version(*, urlopen=None, timeout: float = 6.0) -> str:
+    """Return the latest stable GitHub release version without trusting its URL."""
+    opener = urlopen or urllib_request.urlopen
+    request = urllib_request.Request(
+        PROJECT_LATEST_RELEASE_API_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"LingJing-Desktop/{APP_VERSION}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    response = opener(request, timeout=min(8.0, max(1.0, float(timeout))))
+    try:
+        payload = response.read(MAX_RELEASE_METADATA_BYTES + 1)
+    finally:
+        closer = getattr(response, "close", None)
+        if callable(closer):
+            closer()
+    if not isinstance(payload, (bytes, bytearray)) or len(payload) > MAX_RELEASE_METADATA_BYTES:
+        raise ValueError("GitHub Release 响应无效或过大")
+    data = json.loads(bytes(payload).decode("utf-8"))
+    if (
+        not isinstance(data, dict)
+        or data.get("draft") is True
+        or data.get("prerelease") is True
+    ):
+        return ""
+    version = _release_version_tuple(data.get("tag_name"))
+    return ".".join(str(part) for part in version) if version else ""
 
 
 def _validate_download_target_url(
@@ -286,7 +335,9 @@ LAYOUT = {
     "gap": 10,
     "top_h": 78,
     "status_h": 38,
-    "info_h": 72,
+    "info_h": 120,
+    "info_row_h": 56,
+    "info_gap": 8,
     "left_w": 240,
     "actions_h": 42,
     "footer_h": 32,
@@ -874,7 +925,11 @@ class GatewayApp(WindowBase):
         self._workflow_management_lock = threading.Lock()
         self._workflow_operation_name = ""
         self._tunnel_url = ""
+        self._local_url = API_BASE
         self._api_key = ""
+        self._available_release_version = ""
+        self._release_update_check_started = False
+        self._release_update_tooltip = None
         self._poll_run = False
         self._health_poll_thread = None
         self._health_poll_lock = threading.Lock()
@@ -956,6 +1011,7 @@ class GatewayApp(WindowBase):
         self.after(600, self._show_comfyui_recovery_result)
         self.after(800, self._show_runtime_update_result)
         self.after(1000, self._show_comfyui_update_result)
+        self.after(1400, self._start_release_update_check)
 
     def center(self):
         self.update_idletasks()
@@ -1561,7 +1617,115 @@ class GatewayApp(WindowBase):
         tk.Label(row, text="本机节点", font=F["bold"], fg=C["text"], bg=C["hover"]).pack(side="left")
         tk.Label(node, text="客户端正在运行", font=F["tiny"], fg=C["text2"], bg=C["hover"]).pack(anchor="w", padx=27, pady=(0, 9))
 
-        tk.Label(self._sidebar, text=f"Desktop  {APP_VERSION}", font=F["tiny"], fg=C["muted"], bg=C["sidebar"]).pack(anchor="w", padx=18, pady=(0, 14))
+        self._version_row = tk.Frame(self._sidebar, bg=C["sidebar"], cursor="")
+        self._version_row.pack(fill="x", padx=18, pady=(0, 14))
+        self._version_label = tk.Label(
+            self._version_row,
+            text=f"Desktop  {APP_VERSION}",
+            font=F["tiny"],
+            fg=C["muted"],
+            bg=C["sidebar"],
+        )
+        self._version_label.pack(side="left")
+        self._release_update_dot = tk.Canvas(
+            self._version_row,
+            width=10,
+            height=10,
+            bg=C["sidebar"],
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self._release_update_dot_item = self._release_update_dot.create_oval(
+            1,
+            1,
+            9,
+            9,
+            fill=C["success"],
+            outline="",
+        )
+        for widget in (self._version_row, self._version_label, self._release_update_dot):
+            widget.bind("<Enter>", self._show_release_update_tooltip, add="+")
+            widget.bind("<Leave>", self._hide_release_update_tooltip, add="+")
+            widget.bind("<Button-1>", self._open_latest_release, add="+")
+
+    def _start_release_update_check(self):
+        if self._release_update_check_started or not _release_version_tuple(APP_VERSION):
+            return
+        self._release_update_check_started = True
+        threading.Thread(target=self._release_update_worker, daemon=True).start()
+
+    def _release_update_worker(self):
+        try:
+            latest = _fetch_latest_release_version()
+        except Exception:
+            return
+        if self._shutting_down or not _is_newer_release(APP_VERSION, latest):
+            return
+        try:
+            self.after(
+                0,
+                lambda version=latest: self._apply_available_release(version),
+            )
+        except (RuntimeError, tk.TclError):
+            return
+
+    def _apply_available_release(self, version: str):
+        if not _is_newer_release(APP_VERSION, version):
+            return
+        self._available_release_version = str(version)
+        if not self._release_update_dot.winfo_manager():
+            self._release_update_dot.pack(side="left", padx=(7, 0), pady=(2, 0))
+        for widget in (self._version_row, self._version_label, self._release_update_dot):
+            widget.configure(cursor="hand2")
+
+    def _release_update_message(self) -> str:
+        if not self._available_release_version:
+            return ""
+        return (
+            f"发现新版本 {self._available_release_version}，"
+            "点击前往 GitHub Release 更新"
+        )
+
+    def _show_release_update_tooltip(self, _event=None):
+        message = self._release_update_message()
+        if not message or self._release_update_tooltip is not None:
+            return
+        tooltip = tk.Toplevel(self)
+        tooltip.wm_overrideredirect(True)
+        try:
+            tooltip.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        label = tk.Label(
+            tooltip,
+            text=message,
+            font=F["small"],
+            fg="#ffffff",
+            bg=C["text"],
+            relief="solid",
+            bd=1,
+            padx=10,
+            pady=7,
+        )
+        label.pack()
+        tooltip.update_idletasks()
+        x = self._version_row.winfo_rootx()
+        y = max(0, self._version_row.winfo_rooty() - tooltip.winfo_reqheight() - 6)
+        tooltip.geometry(f"+{x}+{y}")
+        self._release_update_tooltip = tooltip
+
+    def _hide_release_update_tooltip(self, _event=None):
+        tooltip = self._release_update_tooltip
+        self._release_update_tooltip = None
+        if tooltip is not None:
+            try:
+                tooltip.destroy()
+            except tk.TclError:
+                pass
+
+    def _open_latest_release(self, _event=None):
+        if self._available_release_version:
+            webbrowser.open(PROJECT_RELEASES_URL)
 
     def _build_page_host(self):
         self._page_host = tk.Frame(self._content_root, bg=C["bg"])
@@ -1760,32 +1924,84 @@ class GatewayApp(WindowBase):
         self._info_frame = tk.Frame(self._overview_page, bg=C["bg"])
         self._info_frame.pack(fill="x", padx=LAYOUT["outer"], pady=(8, 10))
 
-        # 公网 URL
-        tunnel_card = self._card(self._info_frame)
-        tunnel_card.configure(height=LAYOUT["info_h"])
-        tunnel_card.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        tunnel_card.pack_propagate(False)
-        url_row = tk.Frame(tunnel_card, bg=C["card"])
-        url_row.pack(fill="both", expand=True, padx=14, pady=12)
-        tk.Label(url_row, text="◎", font=("Microsoft YaHei UI", 16, "bold"),
-                 fg=C["primary"], bg=C["card"], width=2).pack(side="left", padx=(0, 8))
-        text_box = tk.Frame(url_row, bg=C["card"])
-        text_box.pack(side="left", fill="x", expand=True)
-        tk.Label(text_box, text="公网 URL", font=F["bold"], fg=C["text"], bg=C["card"]).pack(anchor="w")
-        self._url_label = tk.Label(text_box, text="正在建立公网连接...", font=F["url"],
-                                   fg=C["primary"], bg=C["card"], anchor="w")
-        self._url_label.pack(anchor="w", pady=(5, 0))
-        url_copy_box = tk.Frame(url_row, bg=C["card"], width=68, height=30)
-        url_copy_box.pack(side="right", padx=(10, 0))
-        url_copy_box.pack_propagate(False)
-        self._button(url_copy_box, "复制", self._copy_public_url, "plain", width=66).pack(fill="both", expand=True)
+        self._url_stack = tk.Frame(
+            self._info_frame,
+            bg=C["bg"],
+            height=LAYOUT["info_h"],
+        )
+        self._url_stack.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        self._url_stack.pack_propagate(False)
+
+        def build_url_card(*, title, icon, value, color, command):
+            card = self._card(self._url_stack)
+            card.configure(height=LAYOUT["info_row_h"])
+            card.pack_propagate(False)
+            row = tk.Frame(card, bg=C["card"])
+            row.pack(fill="both", expand=True, padx=12, pady=7)
+            tk.Label(
+                row,
+                text=icon,
+                font=("Microsoft YaHei UI", 14, "bold"),
+                fg=color,
+                bg=C["card"],
+                width=2,
+            ).pack(side="left", padx=(0, 7))
+            text_box = tk.Frame(row, bg=C["card"])
+            text_box.pack(side="left", fill="x", expand=True)
+            tk.Label(
+                text_box,
+                text=title,
+                font=F["bold"],
+                fg=C["text"],
+                bg=C["card"],
+            ).pack(anchor="w")
+            value_label = tk.Label(
+                text_box,
+                text=value,
+                font=F["url"],
+                fg=color,
+                bg=C["card"],
+                anchor="w",
+            )
+            value_label.pack(anchor="w", pady=(1, 0))
+            copy_box = tk.Frame(row, bg=C["card"], width=62, height=28)
+            copy_box.pack(side="right", padx=(8, 0))
+            copy_box.pack_propagate(False)
+            self._button(copy_box, "复制", command, "plain", width=60).pack(
+                fill="both",
+                expand=True,
+            )
+            return card, value_label
+
+        self._public_url_card, self._url_label = build_url_card(
+            title="公网 URL",
+            icon="◎",
+            value="正在建立公网连接...",
+            color=C["primary"],
+            command=self._copy_public_url,
+        )
+        self._public_url_card.pack(side="top", fill="x")
+        self._url_card_gap = tk.Frame(
+            self._url_stack,
+            bg=C["bg"],
+            height=LAYOUT["info_gap"],
+        )
+        self._url_card_gap.pack(side="top", fill="x")
+        self._local_url_card, self._local_url_label = build_url_card(
+            title="本地 API",
+            icon="⌂",
+            value=self._local_url,
+            color=C["success"],
+            command=self._copy_local_url,
+        )
+        self._local_url_card.pack(side="top", fill="x")
 
         # API Key
-        key_card = self._card(self._info_frame)
-        key_card.configure(height=LAYOUT["info_h"])
-        key_card.pack(side="left", fill="x", expand=True)
-        key_card.pack_propagate(False)
-        key_row = tk.Frame(key_card, bg=C["card"])
+        self._api_key_card = self._card(self._info_frame)
+        self._api_key_card.configure(height=LAYOUT["info_h"])
+        self._api_key_card.pack(side="left", fill="both", expand=True)
+        self._api_key_card.pack_propagate(False)
+        key_row = tk.Frame(self._api_key_card, bg=C["card"])
         key_row.pack(fill="both", expand=True, padx=14, pady=12)
         tk.Label(key_row, text="⚿", font=("Microsoft YaHei UI", 18, "bold"),
                  fg=C["primary"], bg=C["card"], width=2).pack(side="left", padx=(0, 8))
@@ -6203,6 +6419,27 @@ class GatewayApp(WindowBase):
     def _set_public_url(self, url: str):
         self._url_label.config(text=self._short_middle(url, 16, 10) if url else "正在建立公网连接...")
 
+    def _set_local_url(self, url: str):
+        value = str(url or "").strip().rstrip("/")
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+            valid = (
+                parsed.scheme.lower() == "http"
+                and str(parsed.hostname or "").lower() in _LOOPBACK_SERVER_HOSTS
+                and parsed.username is None
+                and parsed.password is None
+                and port is not None
+                and 1 <= port <= 65535
+                and parsed.path in ("", "/")
+                and not parsed.query
+                and not parsed.fragment
+            )
+        except ValueError:
+            valid = False
+        self._local_url = value if valid else API_BASE
+        self._local_url_label.config(text=self._local_url)
+
     def _clear_public_url(self):
         self._tunnel_url = ""
         self._set_public_url("")
@@ -6220,6 +6457,9 @@ class GatewayApp(WindowBase):
 
     def _copy_public_url(self):
         self._copy(self._tunnel_url)
+
+    def _copy_local_url(self):
+        self._copy(self._local_url or API_BASE)
 
     def _copy_api_key(self):
         self._copy(self._api_key)
@@ -8352,6 +8592,8 @@ class GatewayApp(WindowBase):
         url = data.get("base_url", "")
         tunnel_data = data.get("tunnel", {})
         comfy_data = data.get("comfyui", {})
+
+        self._set_local_url(data.get("local_api") or self._local_url or API_BASE)
 
         self._set_light("api", "online")
 

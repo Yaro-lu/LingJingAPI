@@ -77,6 +77,124 @@ class FakeWidget:
 
 
 class DashboardShellTests(unittest.TestCase):
+    def test_release_version_comparison_uses_numeric_semver(self):
+        cases = (
+            ("1.0.2", "v1.0.3", True),
+            ("1.9.9", "v1.10.0", True),
+            ("1.0.2", "v1.0.2", False),
+            ("1.0.2", "v1.0.1", False),
+            ("dev", "v1.0.3", False),
+            ("1.0.2", "nightly", False),
+        )
+        for current, latest, expected in cases:
+            with self.subTest(current=current, latest=latest):
+                self.assertEqual(
+                    main_gateway._is_newer_release(current, latest),
+                    expected,
+                )
+
+    def test_latest_release_check_uses_the_renamed_repository(self):
+        response = mock.Mock()
+        response.read.return_value = json.dumps(
+            {
+                "tag_name": "v1.0.3",
+                "draft": False,
+                "prerelease": False,
+                "html_url": "https://attacker.invalid/not-used",
+            }
+        ).encode("utf-8")
+        urlopen = mock.Mock(return_value=response)
+
+        latest = main_gateway._fetch_latest_release_version(urlopen=urlopen)
+
+        self.assertEqual(latest, "1.0.3")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            main_gateway.PROJECT_LATEST_RELEASE_API_URL,
+            "https://api.github.com/repos/Yaro-lu/LingJingAPI/releases/latest",
+        )
+        self.assertEqual(request.full_url, main_gateway.PROJECT_LATEST_RELEASE_API_URL)
+        self.assertEqual(request.get_header("Accept"), "application/vnd.github+json")
+        self.assertIn("LingJing-Desktop/", request.get_header("User-agent"))
+        self.assertLessEqual(urlopen.call_args.kwargs["timeout"], 8)
+        response.close.assert_called_once_with()
+
+    def test_copy_local_api_uses_the_full_unshortened_url(self):
+        app = object.__new__(GatewayApp)
+        app._local_url = "http://127.0.0.1:19001"
+        app._copy = mock.Mock()
+
+        app._copy_local_url()
+
+        app._copy.assert_called_once_with("http://127.0.0.1:19001")
+
+    def test_local_api_accepts_only_a_plain_loopback_origin(self):
+        app = object.__new__(GatewayApp)
+        app._local_url_label = mock.Mock()
+
+        for valid in (
+            "http://127.0.0.1:19001",
+            "http://localhost:19001/",
+            "http://[::1]:19001",
+        ):
+            with self.subTest(valid=valid):
+                app._set_local_url(valid)
+                self.assertEqual(app._local_url, valid.rstrip("/"))
+
+        for invalid in (
+            "http://user:pass@127.0.0.1:19001",
+            "http://127.0.0.1:19001/?mode=x",
+            "http://127.0.0.1:19001#fragment",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "https://127.0.0.1:19001",
+            "http://example.com:19001",
+        ):
+            with self.subTest(invalid=invalid):
+                app._set_local_url(invalid)
+                self.assertEqual(app._local_url, main_gateway.API_BASE)
+                app._local_url_label.config.assert_called_with(
+                    text=main_gateway.API_BASE
+                )
+
+    def test_release_worker_only_applies_updates_through_tk_after(self):
+        app = object.__new__(GatewayApp)
+        app._shutting_down = False
+        app.after = mock.Mock()
+        app._apply_available_release = mock.Mock()
+
+        with mock.patch.object(
+            main_gateway,
+            "_fetch_latest_release_version",
+            return_value="1.0.4",
+        ):
+            app._release_update_worker()
+
+        app._apply_available_release.assert_not_called()
+        callback = app.after.call_args.args[1]
+        callback()
+        app._apply_available_release.assert_called_once_with("1.0.4")
+
+    def test_release_worker_is_silent_without_a_new_stable_version(self):
+        app = object.__new__(GatewayApp)
+        app._shutting_down = False
+        app.after = mock.Mock()
+        app._apply_available_release = mock.Mock()
+
+        for latest in ("", "1.0.1", main_gateway.APP_VERSION):
+            with (
+                self.subTest(latest=latest),
+                mock.patch.object(
+                    main_gateway,
+                    "_fetch_latest_release_version",
+                    return_value=latest,
+                ),
+            ):
+                app._release_update_worker()
+
+        app.after.assert_not_called()
+        app._apply_available_release.assert_not_called()
+
     def test_open_output_rejects_absolute_and_traversal_locations(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -213,6 +331,44 @@ class DashboardShellTests(unittest.TestCase):
                     "The approved runtime-status card must keep its component order",
                 )
 
+                info_texts = set(self._all_text(app._info_frame))
+                self.assertTrue({"公网 URL", "本地 API", "API Key"} <= info_texts)
+                self.assertEqual(app._local_url_label.cget("text"), main_gateway.API_BASE)
+
+                app._show_page("overview")
+                app.geometry("1090x700")
+                app.update()
+                stack_top = app._url_stack.winfo_rooty()
+                stack_bottom = stack_top + app._url_stack.winfo_height()
+                key_top = app._api_key_card.winfo_rooty()
+                key_bottom = key_top + app._api_key_card.winfo_height()
+                self.assertLessEqual(abs(stack_top - key_top), 1)
+                self.assertLessEqual(abs(stack_bottom - key_bottom), 1)
+                public_top = app._public_url_card.winfo_rooty()
+                public_bottom = public_top + app._public_url_card.winfo_height()
+                local_top = app._local_url_card.winfo_rooty()
+                local_bottom = local_top + app._local_url_card.winfo_height()
+                self.assertLessEqual(abs(public_top - stack_top), 1)
+                self.assertLessEqual(abs(local_bottom - stack_bottom), 1)
+                self.assertGreater(local_top, public_bottom)
+                self.assertLessEqual(
+                    abs((local_top - public_bottom) - main_gateway.LAYOUT["info_gap"]),
+                    1,
+                )
+                self.assertLessEqual(
+                    abs(
+                        app._public_url_card.winfo_height()
+                        + (local_top - public_bottom)
+                        + app._local_url_card.winfo_height()
+                        - app._api_key_card.winfo_height()
+                    ),
+                    1,
+                )
+                self.assertLess(
+                    app._public_url_card.winfo_height(),
+                    app._api_key_card.winfo_height(),
+                )
+
                 for page_id in PAGE_IDS:
                     app._show_page(page_id)
                     app.update_idletasks()
@@ -340,6 +496,47 @@ class DashboardShellTests(unittest.TestCase):
                 self._find_by_text(settings, "修复运行环境").invoke()
                 update_comfyui.assert_called_once_with()
                 repair_runtime.assert_called_once_with()
+            finally:
+                app._dashboard_pages.cancel_pending()
+                app.destroy()
+
+    def test_available_release_shows_green_dot_and_fixed_release_target(self):
+        with (
+            mock.patch.object(threading.Thread, "start", lambda _thread: None),
+            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
+        ):
+            app = GatewayApp()
+            try:
+                app.attributes("-alpha", 0.0)
+                app.update()
+                self.assertFalse(app._release_update_dot.winfo_ismapped())
+
+                app._apply_available_release("1.0.4")
+                app.update_idletasks()
+
+                self.assertTrue(app._release_update_dot.winfo_ismapped())
+                self.assertEqual(
+                    app._version_label.cget("text"),
+                    f"Desktop  {main_gateway.APP_VERSION}",
+                )
+                self.assertEqual(
+                    app._release_update_dot.itemcget(
+                        app._release_update_dot_item,
+                        "fill",
+                    ),
+                    C["success"],
+                )
+                self.assertIn("1.0.4", app._release_update_message())
+                self.assertTrue(app._version_row.bind("<Enter>"))
+                self.assertTrue(app._version_row.bind("<Leave>"))
+                self.assertTrue(app._version_row.bind("<Button-1>"))
+                with mock.patch.object(main_gateway.webbrowser, "open") as open_browser:
+                    app._open_latest_release()
+                self.assertEqual(
+                    main_gateway.PROJECT_RELEASES_URL,
+                    "https://github.com/Yaro-lu/LingJingAPI/releases/latest",
+                )
+                open_browser.assert_called_once_with(main_gateway.PROJECT_RELEASES_URL)
             finally:
                 app._dashboard_pages.cancel_pending()
                 app.destroy()
@@ -489,14 +686,14 @@ class DashboardShellTests(unittest.TestCase):
                 app.attributes("-alpha", 0.0)
                 app._download_runtime = mock.Mock()
                 app._runtime_mirror_url = mock.Mock(
-                    return_value="https://github.com/Yaro-lu/LingJingAI/releases/download/v1/runtime.7z"
+                    return_value="https://github.com/Yaro-lu/LingJingAPI/releases/download/v1/runtime.7z"
                 )
 
                 app._install_runtime_from_mirror()
                 app.update_idletasks()
 
                 app._download_runtime.assert_called_once_with(
-                    "https://github.com/Yaro-lu/LingJingAI/releases/download/v1/runtime.7z",
+                    "https://github.com/Yaro-lu/LingJingAPI/releases/download/v1/runtime.7z",
                     repair_confirmed=False,
                 )
                 popups = [
@@ -1081,7 +1278,7 @@ class DashboardShellTests(unittest.TestCase):
                     widget
                     for widget in widgets
                     if isinstance(widget, tk.Entry)
-                    and widget.get() == "https://github.com/Yaro-lu/LingJingAI"
+                    and widget.get() == "https://github.com/Yaro-lu/LingJingAPI"
                 ]
                 self.assertEqual(len(url_fields), 1)
 
@@ -1089,7 +1286,7 @@ class DashboardShellTests(unittest.TestCase):
                 self.assertIsNotNone(copy_button)
                 copy_button.invoke()
                 app.update()
-                self.assertEqual(app.clipboard_get(), "https://github.com/Yaro-lu/LingJingAI")
+                self.assertEqual(app.clipboard_get(), "https://github.com/Yaro-lu/LingJingAPI")
                 self.assertIsNotNone(self._find_by_text(popup, "自动拉取失败，请手动下载"))
                 self.assertTrue(
                     any("网络连接失败" in text for text in self._all_text(popup))

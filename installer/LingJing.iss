@@ -16,7 +16,7 @@
 
 #define MyAppName "灵境造片厂"
 #define MyAppPublisher "Yaro-lu"
-#define MyAppURL "https://github.com/Yaro-lu/LingJingAI"
+#define MyAppURL "https://github.com/Yaro-lu/LingJingAPI"
 #define MyAppExe "runtime\python\pythonw.exe"
 
 [Setup]

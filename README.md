@@ -6,7 +6,7 @@
 
 灵境造片厂面向希望简单使用本地 AI 的创作者和普通用户。把comfyUI 工作流导入进去，可以提供一个API接口供其他项目用，不需要先学习 ComfyUI。
 
-[下载最新版本](https://github.com/Yaro-lu/LingJingAI/releases/latest) · [查看使用教学 PDF](docs/灵境造片厂使用教学.pdf)
+[下载最新版本](https://github.com/Yaro-lu/LingJingAPI/releases/latest) · [查看使用教学 PDF](docs/灵境造片厂使用教学.pdf)
 
 ## 它能帮你做什么
 
@@ -14,18 +14,18 @@
 - **图片生成与编辑**：使用文生图、图生图等工作流完成视觉创作。
 - **视频生成**：使用首尾帧等视频工作流生成动态内容。
 - **环境与模型管理**：自动检查缺少的运行环境和模型，并提供修复、下载与更新入口。
-- **给其他软件调用**：通过控制台提供的 URL 和 API Key，让网页、业务程序或局域网设备使用这台电脑的 AI 能力。
+- **给其他软件调用**：同一台电脑优先使用控制台提供的本地 API；远程调用使用公网 URL，两者共用同一个 API Key。
 
 具体能力取决于你已经安装并启用的工作流和模型。
 
 ## 第一次使用
 
-1. 从 [Releases](https://github.com/Yaro-lu/LingJingAI/releases/latest) 下载并安装 `LingJingAI-Setup-1.0.2-win-x64.exe`。
+1. 从 [Releases](https://github.com/Yaro-lu/LingJingAPI/releases/latest) 下载并安装 `LingJingAI-Setup-1.0.3-win-x64.exe`。
 2. 启动“灵境造片厂”，进入“模型与环境”，点击“一键修复”。
 3. 等待客户端自动下载、校验并安装运行环境；如果自动拉取失败，再按弹窗提示手动下载环境包。
 4. 在模型列表中点击“下载模型”，补齐你准备使用的工作流所需模型。
 5. 选择一个显示“可以使用”的工作流，并将它设为默认工作流。
-6. 回到“控制台”，复制 URL 和 API Key。
+6. 回到“控制台”；本机程序复制“本地 API”，远程程序复制“公网 URL”，并同时复制 API Key。
 7. 打开桌面上的“灵境造片厂示例页”，填入 URL 和 Key，即可尝试文字、图片或视频生成。
 
 安装目录中的《灵境造片厂使用教学.pdf》包含更完整的图文步骤。
@@ -42,7 +42,7 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `LingJingAI-Setup-1.0.2-win-x64.exe` | 必装的轻量客户端，包含界面和启动所需组件 |
+| `LingJingAI-Setup-1.0.3-win-x64.exe` | 必装的轻量客户端，包含界面和启动所需组件 |
 | `runtime-nvidia-rtx20plus-cu130-v1.0.0.7z` | 独立运行环境；通常由客户端自动下载，网络失败时再手动下载 |
 | 模型文件 | 按工作流分别下载，不包含在客户端或运行环境包中 |
 
@@ -80,8 +80,8 @@
 
 ## 下载与使用说明
 
-- 最新版本：[GitHub Releases](https://github.com/Yaro-lu/LingJingAI/releases/latest)
-- 当前版本：`1.0.2`
+- 最新版本：[GitHub Releases](https://github.com/Yaro-lu/LingJingAPI/releases/latest)
+- 当前版本：`1.0.3`
 - 仅可用于学习、测试与评估；模型和第三方组件还需分别遵守其自身许可证。
 - 主要第三方组件及许可证提示见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

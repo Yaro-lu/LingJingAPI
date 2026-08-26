@@ -204,7 +204,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertIn("灵境造片厂使用教学.pdf", self.release_script)
 
     def test_readme_describes_manual_download_and_installed_tutorial(self):
-        for marker in ("https://github.com/Yaro-lu/LingJingAI", "一键修复", "拉取失败", "灵境造片厂使用教学.pdf"):
+        for marker in ("https://github.com/Yaro-lu/LingJingAPI", "一键修复", "拉取失败", "灵境造片厂使用教学.pdf"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.readme)
 

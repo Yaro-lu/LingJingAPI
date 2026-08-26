@@ -152,7 +152,7 @@ class RuntimeMaintenanceTests(unittest.TestCase):
         self.assertNotIn("PYTHONSTARTUP", probe_env)
 
     def test_download_redirects_are_rejected_before_transport_follows_them(self):
-        original = "https://github.com/Yaro-lu/LingJingAI/releases/download/v1/runtime.7z"
+        original = "https://github.com/Yaro-lu/LingJingAPI/releases/download/v1/runtime.7z"
         request = urllib.request.Request(original)
         handler = main_gateway._DownloadRedirectHandler(
             original,
@@ -192,7 +192,7 @@ class RuntimeMaintenanceTests(unittest.TestCase):
                 main_gateway.MODEL_DOWNLOAD_REDIRECT_SUFFIXES,
             ),
             (
-                "https://github.com/Yaro-lu/LingJingAI/releases/download/v1/runtime.7z",
+                "https://github.com/Yaro-lu/LingJingAPI/releases/download/v1/runtime.7z",
                 "https://release-assets.githubusercontent.com/file",
                 main_gateway.RUNTIME_DOWNLOAD_REDIRECT_SUFFIXES,
             ),

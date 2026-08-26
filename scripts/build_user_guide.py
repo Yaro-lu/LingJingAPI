@@ -339,7 +339,7 @@ def build_story(s):
             "安装或修复运行环境，并执行“检查环境”。",
             "导入工作流所需模型，然后点击“重新检查”。",
             "在工作流页面选择默认工作流。",
-            "回到控制台启动后台服务，复制 URL 和 API Key。",
+            "回到控制台启动后台服务；同机调用复制“本地 API”，远程调用复制“公网 URL”，两者使用同一个 API Key。",
             "打开桌面或安装目录中的“灵境造片厂示例页”，填写 URL 和 Key，连接后选择已检测到的文字、图片或视频模型。",
         ],
         1,
@@ -352,7 +352,7 @@ def build_story(s):
     story.append(Paragraph("“灵境造片厂示例页.html”完全保存在本机，是一个不依赖额外服务的纯前端页面。它只会把你填写的 URL、API Key 和生成参数发送给已经启动的灵境造片厂客户端；连接后会读取客户端模型列表，并按文字、图片、视频自动分类。", s["body"]))
     story.append(note_box("推荐第一次使用先打开示例页：输入客户端控制台显示的 URL 与 API Key，点击“连接并检测模型”，在“图片”分类输入画面描述后开始生成；视频分类需要选择首帧和尾帧图片。API Key 仅保存在当前浏览器会话中，关闭浏览器后需要重新填写。", s["body"]))
     story.append(Paragraph("地址与鉴权", s["h2"]))
-    story.append(Paragraph("控制台会显示公网或本地 BASE_URL，以及生成接口使用的 API_KEY。除 `/healthz` 外，业务接口通常需要在请求头中携带 Bearer Token。本机地址可使用 HTTP；远程或公网地址必须使用 HTTPS，示例页会拒绝向远程明文 HTTP 地址发送 Key。", s["body"]))
+    story.append(Paragraph("控制台会同时显示“本地 API”和“公网 URL”，两者使用同一个 API_KEY。同一台电脑上的程序优先使用本地 API，避免依赖公网隧道；其他设备或远程程序使用公网 URL。除 `/healthz` 外，业务接口通常需要在请求头中携带 Bearer Token。本机地址可使用 HTTP；远程或公网地址必须使用 HTTPS，示例页会拒绝向远程明文 HTTP 地址发送 Key。", s["body"]))
     story.append(code_box('Authorization: Bearer API_KEY\nContent-Type: application/json', s["code"]))
     story.append(Spacer(1, 4 * mm))
     story.append(Paragraph("主要接口", s["h2"]))

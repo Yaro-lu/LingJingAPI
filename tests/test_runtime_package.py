@@ -160,7 +160,7 @@ class RuntimePackageContractTests(unittest.TestCase):
                 {},
             ),
             RUNTIME_RELEASE_URL.replace(
-                "https://github.com/Yaro-lu/LingJingAI/releases/download",
+                "https://github.com/Yaro-lu/LingJingAPI/releases/download",
                 "https://mirror.example",
             ),
         )

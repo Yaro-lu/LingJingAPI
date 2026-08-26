@@ -6,7 +6,7 @@
 
 LingJing AI Studio is designed for creators and everyday users who want a simpler way to run local AI. From one interface, you can prepare the runtime, install required models, choose a workflow, and generate text, images, or video on your own computer. A bundled example page lets you try it without learning ComfyUI first.
 
-[Download the latest release](https://github.com/Yaro-lu/LingJingAI/releases/latest) · [Open the Chinese PDF guide](docs/灵境造片厂使用教学.pdf)
+[Download the latest release](https://github.com/Yaro-lu/LingJingAPI/releases/latest) · [Open the Chinese PDF guide](docs/灵境造片厂使用教学.pdf)
 
 ## What you can do
 
@@ -14,18 +14,18 @@ LingJing AI Studio is designed for creators and everyday users who want a simple
 - **Create and edit images** with text-to-image and image-to-image workflows.
 - **Generate video** with supported keyframe and video workflows.
 - **Maintain the runtime and models** with built-in checks, repair, download, and update actions.
-- **Connect other software** through the URL and API Key shown on the dashboard.
+- **Connect other software** through the Local API on the same computer or the Public URL for remote access; both use the same API Key.
 
 Available capabilities depend on the workflows and models installed on your computer.
 
 ## First-time setup
 
-1. Download and install `LingJingAI-Setup-1.0.2-win-x64.exe` from [Releases](https://github.com/Yaro-lu/LingJingAI/releases/latest).
+1. Download and install `LingJingAI-Setup-1.0.3-win-x64.exe` from [Releases](https://github.com/Yaro-lu/LingJingAPI/releases/latest).
 2. Launch LingJing AI Studio, open **模型与环境 (Models & Runtime)**, and select **一键修复 (One-click Repair)**.
 3. Wait while the client downloads, verifies, and installs the runtime. If the network download fails, use the manual runtime package offered by the error dialog.
 4. Select **下载模型 (Download Models)** for the workflow you want to use.
 5. Choose a workflow marked **可以使用 (Available)** and set it as the default.
-6. Return to **控制台 (Dashboard)** and copy the URL and API Key.
+6. Return to **控制台 (Dashboard)**. Use **本地 API (Local API)** on the same computer or **公网 URL (Public URL)** for remote access, together with the API Key.
 7. Open **灵境造片厂示例页 (LingJing AI Studio Example)** from the desktop, enter the URL and Key, and try a text, image, or video request.
 
 The Chinese PDF guide installed with the client contains a more detailed walkthrough.
@@ -42,7 +42,7 @@ The Chinese PDF guide installed with the client contains a more detailed walkthr
 
 | File | Purpose |
 | --- | --- |
-| `LingJingAI-Setup-1.0.2-win-x64.exe` | Required lightweight client containing the interface and launcher components |
+| `LingJingAI-Setup-1.0.3-win-x64.exe` | Required lightweight client containing the interface and launcher components |
 | `runtime-nvidia-rtx20plus-cu130-v1.0.0.7z` | Separate runtime package; normally downloaded automatically, with manual installation as a fallback |
 | Model files | Downloaded separately for each workflow; not bundled with the client or runtime |
 
@@ -80,8 +80,8 @@ Not in this version. Signing out stops further platform synchronization but does
 
 ## Download and usage notice
 
-- Latest version: [GitHub Releases](https://github.com/Yaro-lu/LingJingAI/releases/latest)
-- Current client version: `1.0.2`
+- Latest version: [GitHub Releases](https://github.com/Yaro-lu/LingJingAPI/releases/latest)
+- Current client version: `1.0.3`
 - It may be used only for learning, testing, and evaluation. Models and third-party components remain subject to their own licenses.
 - See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for major bundled components and license notices.
 

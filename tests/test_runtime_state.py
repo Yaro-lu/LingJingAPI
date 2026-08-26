@@ -8,6 +8,19 @@ from app.core.runtime_state import RuntimeState
 
 
 class RuntimeStateTests(unittest.TestCase):
+    def test_start_session_publishes_the_requested_loopback_port(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime_dir = Path(temp_dir)
+            state = RuntimeState(runtime_dir)
+
+            state.start_session(19001)
+
+            saved = json.loads(
+                (runtime_dir / "session.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state.local_api, "http://127.0.0.1:19001")
+            self.assertEqual(saved["local_api"], "http://127.0.0.1:19001")
+
     def test_access_key_persists_and_offline_clears_public_url(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             runtime_dir = Path(temp_dir)

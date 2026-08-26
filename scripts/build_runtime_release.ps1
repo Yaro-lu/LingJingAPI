@@ -5,7 +5,7 @@ param(
     [string]$Version = "",
     [string]$SourceRoot = "",
     [string]$PackageBaseName = "runtime-nvidia-rtx20plus-cu130",
-    [string]$Repository = "Yaro-lu/LingJingAI",
+    [string]$Repository = "Yaro-lu/LingJingAPI",
     [switch]$ValidateOnly
 )
 
