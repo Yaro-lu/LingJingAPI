@@ -515,6 +515,9 @@ try {
         'start.bat',
         'check-env.bat',
         'README.md',
+        'LICENSE',
+        'THIRD_PARTY_NOTICES.md',
+        '开源许可说明.txt',
         'docs\灵境造片厂使用教学.pdf',
         'examples\灵境造片厂示例页.html',
         'requirements.lock',
@@ -562,7 +565,11 @@ try {
             Copy-RequiredFile -Source $source -Destination (Join-Path $StageRoot $rootFile)
         }
     }
-    foreach ($optionalNotice in @('LICENSE', 'LICENSE.txt', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md')) {
+    foreach ($requiredNotice in @('LICENSE', 'THIRD_PARTY_NOTICES.md', '开源许可说明.txt')) {
+        $source = Join-Path $SourceRoot $requiredNotice
+        Copy-RequiredFile -Source $source -Destination (Join-Path $StageRoot $requiredNotice)
+    }
+    foreach ($optionalNotice in @('LICENSE.txt', 'CHANGELOG.md')) {
         $source = Join-Path $SourceRoot $optionalNotice
         if (Test-Path -LiteralPath $source -PathType Leaf) {
             Copy-RequiredFile -Source $source -Destination (Join-Path $StageRoot $optionalNotice)
@@ -615,6 +622,9 @@ try {
         'start.bat',
         'check-env.bat',
         'README.md',
+        'LICENSE',
+        'THIRD_PARTY_NOTICES.md',
+        '开源许可说明.txt',
         '灵境造片厂使用教学.pdf',
         '灵境造片厂示例页.html',
         'requirements.lock',

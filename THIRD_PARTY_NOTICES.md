@@ -1,6 +1,6 @@
 # 第三方组件说明 / Third-Party Notices
 
-灵境造片厂包含或调用第三方软件。本文件用于提示主要组件及其许可证来源，不构成对灵境造片厂自有代码的开源许可，也不替代各组件随包附带的完整许可证文本。
+灵境造片厂中由项目作者拥有版权并有权授权的部分采用 Apache License 2.0。本文件用于提示主要第三方组件及其许可证来源；Apache License 2.0 不会覆盖这些第三方内容，也不替代各组件随包附带的完整许可证文本。
 
 主要组件包括：
 
@@ -9,6 +9,7 @@
 | Python 3.13 | 便携解释器 | Python Software Foundation License |
 | Tcl/Tk | 桌面界面 | Tcl/Tk License |
 | ComfyUI | 本地生成引擎 | GNU GPL v3；完整文本位于 `runtime/ComfyUI/LICENSE` |
+| Comfy-Org/workflow_templates | 部分内置工作流模板的来源或改编基础 | MIT；https://github.com/Comfy-Org/workflow_templates |
 | PyTorch | GPU 推理 | BSD-3-Clause |
 | cloudflared | 公网 Tunnel | Apache-2.0 |
 | 7-Zip | 环境包解压 | LGPL 与 7-Zip 自带许可；安装包内保留 `bin/7-Zip-License.txt` |

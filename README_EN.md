@@ -94,12 +94,13 @@ Only after you actively sign in does the client send the public URL, local API K
 
 Not in this version. Signing out stops further platform synchronization but does not replace the API Key already shared with that platform. If you no longer trust it, sign out and then generate a new access key in **Settings**. After the API restarts, the previous key can no longer call the local service.
 
-## Download and usage notice
+## Download and open-source license
 
 - Latest version: [GitHub Releases](https://github.com/Yaro-lu/LingJingAPI/releases/latest)
 - Current client version: `1.0.3`
-- It may be used only for learning, testing, and evaluation. Models and third-party components remain subject to their own licenses.
+- Client source code and documentation owned and licensable by the project author are released under the [Apache License 2.0](LICENSE).
 - See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for major bundled components and license notices.
+- Third-party components, external workflows, models, and assets remain governed by their respective source licenses and terms. See the [open-source license notice](开源许可说明.txt).
 
 
 ---

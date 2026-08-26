@@ -16,6 +16,9 @@ class LightweightReleaseContractTests(unittest.TestCase):
             encoding="utf-8-sig"
         )
         cls.readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")
+        cls.readme_en = (ROOT / "README_EN.md").read_text(encoding="utf-8-sig")
+        cls.license_path = ROOT / "LICENSE"
+        cls.open_source_notice_path = ROOT / "开源许可说明.txt"
         cls.version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         cls.runtime_script = (ROOT / "scripts" / "build_runtime_release.ps1").read_text(
             encoding="utf-8-sig"
@@ -164,6 +167,35 @@ class LightweightReleaseContractTests(unittest.TestCase):
             self.readme,
         )
         self.assertIn(f"当前版本：`{self.version}`", self.readme)
+
+    def test_project_declares_apache_2_and_stages_the_license(self):
+        self.assertTrue(self.license_path.is_file())
+        license_text = self.license_path.read_text(encoding="utf-8")
+        self.assertIn("Apache License", license_text)
+        self.assertIn("Version 2.0, January 2004", license_text)
+        self.assertIn("END OF TERMS AND CONDITIONS", license_text)
+        for notice_name in (
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
+            "开源许可说明.txt",
+        ):
+            with self.subTest(notice_name=notice_name):
+                self.assertGreaterEqual(
+                    self.release_script.count(f"'{notice_name}'"),
+                    3,
+                    "License notices must be required inputs, copied, and verified",
+                )
+
+        for readme in (self.readme, self.readme_en):
+            with self.subTest(readme=readme[:20]):
+                self.assertIn("Apache License 2.0", readme)
+
+        self.assertNotIn("仅可用于学习、测试与评估", self.readme)
+        self.assertTrue(self.open_source_notice_path.is_file())
+        notice = self.open_source_notice_path.read_text(encoding="utf-8-sig")
+        self.assertIn("由项目作者拥有版权并有权授权", notice)
+        self.assertIn("第三方组件、外部工作流、模型和素材", notice)
+        self.assertFalse((ROOT / "公开非商业版本说明.txt").exists())
 
     def test_runtime_builder_supports_external_source_and_emits_release_manifest(self):
         for marker in (
