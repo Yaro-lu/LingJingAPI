@@ -1,12 +1,20 @@
 [简体中文](README.md) | [English](README_EN.md)
 
-# LingJing AI Studio
+# LingJing AI Studio · 灵境造片厂
 
-**Turn your Windows PC into a private, local AI creation station.**
+> Turn a Windows RTX PC into a local AI studio—and ComfyUI workflows into APIs other software can call.
 
-LingJing AI Studio is designed for creators and everyday users who want a simpler way to run local AI. From one interface, you can prepare the runtime, install required models, choose a workflow, and generate text, images, or video on your own computer. A bundled example page lets you try it without learning ComfyUI first.
+Use one Windows client to prepare the runtime, import or select workflows, check and download required models, and generate text, images, and video locally. With configured workflows, you do not need to work directly with ComfyUI node graphs.
 
-[Download the latest release](https://github.com/Yaro-lu/LingJingAPI/releases/latest) · [Open the Chinese PDF guide](docs/灵境造片厂使用教学.pdf)
+Apps on the same PC can call the Local API with an API Key; remote clients can use the Public URL with the same Key. Models and generated files remain on the PC by default. Available features and VRAM requirements depend on the installed workflows and models.
+
+[Download for Windows](https://github.com/Yaro-lu/LingJingAPI/releases/latest) · [Quick start](#first-time-setup) · [API reference](#api-usage) · [Chinese PDF guide](docs/灵境造片厂使用教学.pdf)
+
+> **Public access:** The current release attempts to establish an authenticated public Tunnel at startup. Stop the public connection or all background services when remote access is not needed.
+
+## Get started in three steps
+
+Install the client → repair the runtime and download required models → select a workflow and make the first request from the example page
 
 ## What you can do
 
@@ -17,6 +25,14 @@ LingJing AI Studio is designed for creators and everyday users who want a simple
 - **Connect other software** through the Local API on the same computer or the Public URL for remote access; both use the same API Key.
 
 Available capabilities depend on the workflows and models installed on your computer.
+
+## Choose your path
+
+| You are | Start here |
+| --- | --- |
+| Creator | Install the client, prepare the runtime and models, then generate from the example page with an available workflow |
+| ComfyUI user | Import an existing workflow and let the client check its dependencies, models, and public inputs |
+| Developer | Use the Local API or Public URL with an API Key for text, image, video, and asynchronous task endpoints |
 
 ## First-time setup
 
