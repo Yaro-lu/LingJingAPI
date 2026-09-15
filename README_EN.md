@@ -1,61 +1,43 @@
 [简体中文](README.md) | [English](README_EN.md)
 
-# LingJing AI Studio 2.0
+# LingJingAPI · LingJing AI Studio
 
-**Generate text, images and video on a Windows PC, and expose ComfyUI workflows through a browser workspace and authenticated APIs.** Workflow and model management, environment maintenance, reference images, video duration/frame-rate controls and asynchronous results are available in one client. Actual capabilities depend on the installed workflows and models.
+**Use remote GPU compute to generate text, images and video.**
+
+Deploy the generation service on a rented GPU server, then use the companion client page on your computer or a browser on your phone. Models run on the server; your device submits tasks and displays or downloads the results.
+
+**Computer / phone ⇄ URL + API Key ⇄ Remote GPU server**
 
 ## Download
 
-### [Download Windows client 2.0.0](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/LingJingAI-Setup-2.0.0-win-x64.exe)
+**[Server program · Windows EXE](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/LingJingAI-Setup-2.0.0-win-x64.exe) | [Separate runtime package](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/runtime-nvidia-rtx20plus-cu130-v2.0.0.7z)**
 
-### [Download separate NVIDIA / CUDA 13 runtime](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/runtime-nvidia-rtx20plus-cu130-v2.0.0.7z)
+[2.0 release notes](https://github.com/Yaro-lu/LingJingAPI/releases/tag/v2.0.0) · [Companion client page](examples/灵境造片厂示例页.html)
 
-[Release notes and checksums](https://github.com/Yaro-lu/LingJingAPI/releases/tag/v2.0.0) · [Chinese guide (PDF)](docs/灵境造片厂使用教学.pdf) · [API examples](README.md#接口调用)
+Version: `2.0.0`. Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
 
-**Neither package contains model weights, generated assets, account sessions or personal settings.** Model files are downloaded separately or mapped from an existing local directory.
+## Three steps
 
-## Three-step walkthrough
+1. **Deploy on the server:** install the program, runtime and required models, start the service, and copy its public URL and API Key.
+2. **Connect from your device:** open the companion page on your computer and enter the URL and Key. On a phone, open the same public URL in a browser and enter the Key.
+3. **Generate:** select a workflow, enter a prompt or reference image, and let the remote server generate the result.
 
-1. Install the lightweight client. In **Models & Environment**, install the runtime, then download the models needed by your workflow or map existing files. Workflow configuration and model actions share one compact list.
+## Features
 
-![Workflow and model management](docs/images/2.0/workflow-models.png)
+- Text, image generation/editing and video generation, depending on the installed workflows and models.
+- Computer and phone access over public HTTPS, with local and LAN access also supported.
+- ComfyUI workflow import, model/environment management and APIs for third-party software.
 
-*Interface demonstration; status counters use demo data.*
+## Screenshots
 
-2. Open the local URL in a browser (normally `http://127.0.0.1:18188`), or use the LAN URL from a device on the same network. For remote access, use the public HTTPS URL. Enter the generation API Key at the top right. Connection settings are remembered in that browser.
+![Client workspace](https://github.com/Yaro-lu/LingJingAPI/blob/main/docs/images/2.0/studio.png?raw=true)
 
-![Local, LAN and public URL controls](docs/images/2.0/console.png)
+![GPU server control panel](https://github.com/Yaro-lu/LingJingAPI/blob/main/docs/images/2.0/console.png?raw=true)
 
-*Interface demonstration with placeholder public URL and Key.*
+![Workflow and model management](https://github.com/Yaro-lu/LingJingAPI/blob/main/docs/images/2.0/workflow-models.png?raw=true)
 
-3. Select an available workflow, enter a prompt and generate. Images load as previews; click to fetch and enlarge the original. Video previews show the first frame and load the full video on playback. Projects group a chronological history that loads in batches.
+*The last two screenshots are interface demonstrations with placeholder connection details and status values.*
 
-![Browser creation workspace](docs/images/2.0/studio.png)
+The current release package targets **Windows x64 GPU hosts with NVIDIA graphics and CUDA 13**. Calling computers and phones can use a browser.
 
-*User-provided workspace screenshot showing generated image history and video workflow controls.*
-
-## Features in 2.0
-
-- Text workflows with clear system/user prompts and text or JSON response options.
-- Image generation and editing with reference images, workflow default dimensions and custom aspect ratios.
-- Video workflow duration and frame rate; frame counts are calculated to match workflow constraints.
-- Workflow-specific API documentation, schema discovery, async task progress and result downloads.
-- Workflow import and rule-based parameter recognition; optional Qwen3.5 4B assistance only when the model and backend are ready. Manual configuration remains available.
-- Unified workflow/model management, local model mapping and directory changes with scanning.
-- Local, LAN and public browser access without a separate web-hosting service.
-
-## Requirements and behavior
-
-Windows 10 22H2 or Windows 11 x64; NVIDIA RTX 20 series or newer. The CUDA 13 runtime requires R580 or newer drivers. 8 GB VRAM is suitable only for lightweight workflows; larger models need more resources. Reserve storage for the runtime, models and outputs.
-
-The client attempts to create a Cloudflare Tunnel by default. API operations and generated files require a valid Key. Stop the public connection or background services when it is not needed. LAN access requires a reachable PC and a firewall rule for the listening port; guest Wi-Fi isolation may block access.
-
-Projects and connection settings are browser-local. This is a single-user application, without per-Key asset isolation or project sync across browsers. Changing URL or Key does not erase saved history, but original files must still be accessible on their source client. Deleting a project removes its grouping; deleting a file from the asset context menu removes that local file.
-
-Generation and local management keys are separate; client-side secrets use Windows DPAPI. Browser connection storage and third-party model credentials need to be kept private. Optional platform login shares the access URL, generation Key and device/task status with the configured platform; only use a trusted platform. Signing out does not rotate a previously shared Key.
-
-## Development and license
-
-The repository contains source, documentation, example workflows and release scripts, not an installed AI environment. With the portable environment present, use `start.bat` or `check-env.bat`. See the [Chinese README](README.md) for API examples and maintenance details.
-
-Author-owned source and documentation are licensed under [Apache License 2.0](LICENSE). External workflows, models, assets and dependencies retain their original licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [license notes](开源许可说明.txt).
+[Detailed usage and API guide (Chinese)](docs/使用与接口说明.md) · [Apache License 2.0](LICENSE)
