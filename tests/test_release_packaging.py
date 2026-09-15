@@ -161,11 +161,8 @@ class LightweightReleaseContractTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.readme)
 
-    def test_readme_client_filename_and_current_version_follow_version_file(self):
-        self.assertIn(
-            f"LingJingAI-Setup-{self.version}-win-x64.exe",
-            self.readme,
-        )
+    def test_readme_omits_download_links_and_matches_current_version(self):
+        self.assertNotIn("releases/download/", self.readme)
         self.assertIn(f"当前版本：`{self.version}`", self.readme)
 
     def test_project_declares_apache_2_and_stages_the_license(self):

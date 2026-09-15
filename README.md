@@ -13,11 +13,9 @@
 
 **电脑 / 手机 ⇄ URL + API Key ⇄ 远程服务器 / 公司算力机器**
 
-## 下载
+## 安装与环境
 
-**[下载服务端程序 · Windows EXE](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/LingJingAI-Setup-2.0.0-win-x64.exe)　｜　[下载独立运行环境包](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/runtime-nvidia-rtx20plus-cu130-v2.0.0.7z)**
-
-[2.0 更新说明](https://github.com/Yaro-lu/LingJingAPI/releases/tag/v2.0.0) · [本地客户端页面](examples/灵境造片厂示例页.html)
+程序和独立运行环境包在本仓库的 Releases 中分别发布。
 
 当前版本：`2.0.0`。程序和环境包安装在算力端，**不包含模型**；模型可单独下载或映射已有文件。本地轻量客户端页面和手机无需安装模型。
 
@@ -53,4 +51,4 @@
 
 当前发行包适用于 **Windows x64 算力端 + NVIDIA 显卡**，配套 CUDA 13 环境；电脑和手机可通过浏览器调用。服务端一键修复拉取失败时，可手动导入环境包。
 
-[详细使用与接口说明](docs/使用与接口说明.md) · [使用教学 PDF](docs/灵境造片厂使用教学.pdf) · [Apache License 2.0](LICENSE)
+[详细使用与接口说明](docs/使用与接口说明.md) · [Apache License 2.0](LICENSE)
