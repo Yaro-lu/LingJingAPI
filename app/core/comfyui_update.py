@@ -56,6 +56,9 @@ class ValidatedRelease:
     api_url: str
     html_url: str
     zipball_url: str
+    source: str = 'github'
+    source_git: str = ''
+    commit: str = ''
 
 
 @dataclass(frozen=True)
@@ -232,10 +235,24 @@ def validate_latest_release(
 def fetch_latest_release(
     policy: Mapping[str, object] | None = None,
     *,
-    opener: Callable[..., object] = urlopen,
+    opener: Callable[..., object] | None = None,
     timeout: int = 20,
+    channel_callback=None,
 ) -> ValidatedRelease:
     """Fetch the configured GitHub ``latest`` endpoint through an injectable opener."""
+    if opener is None:
+        from app.core.comfyui_update_channels import find_domestic_release
+        if channel_callback:
+            channel_callback('获取稳定版信息：GitHub 官方源（https://api.github.com）')
+        try:
+            return fetch_latest_release(policy, opener=urlopen, timeout=timeout)
+        except ReleaseValidationError:
+            raise
+        except ComfyUIUpdateError as official_error:
+            try:
+                return find_domestic_release(channel_callback=channel_callback)
+            except ComfyUIUpdateError as mirror_error:
+                raise ComfyUIUpdateError(f'官方版本查询失败：{official_error}；{mirror_error}') from mirror_error
     policy = load_update_policy() if policy is None else policy
     _validate_policy_identity(policy)
     endpoint, endpoint_parts = _strict_https_url(
@@ -429,12 +446,26 @@ def download_release_archive(
     target: Path,
     *,
     policy: Mapping[str, object] | None = None,
-    opener: Callable[..., object] = urlopen,
+    opener: Callable[..., object] | None = None,
     progress_callback: Callable[[int, int | None], None] | None = None,
     timeout: int = 60,
     chunk_size: int = 1024 * 1024,
+    channel_callback=None,
 ) -> DownloadResult:
     """Download to ``.part``, report real bytes and calculate SHA256 in one pass."""
+    if opener is None:
+        from app.core.comfyui_update_channels import download_domestic_archive
+        if release.source != 'domestic':
+            try:
+                return download_release_archive(release, target, policy=policy, opener=urlopen,
+                    progress_callback=progress_callback, timeout=timeout, chunk_size=chunk_size)
+            except DownloadValidationError:
+                raise
+            except ComfyUIUpdateError as exc:
+                if channel_callback:
+                    channel_callback(f'官方下载失败，切换国内镜像：{exc}')
+        return download_domestic_archive(release, target, policy=policy,
+            progress_callback=progress_callback, channel_callback=channel_callback)
     policy = load_update_policy() if policy is None else policy
     target = Path(target)
     partial = Path(f"{target}.part")
@@ -735,6 +766,7 @@ def plan_dependency_overlay(
     *,
     policy: Mapping[str, object] | None = None,
     read_text: Callable[[Path], str] | None = None,
+    installed_versions: Mapping[str, str] | None = None,
 ) -> DependencyPlan:
     """Diff requirements and permit only pinned, audited ComfyUI distribution wheels."""
     policy = load_update_policy() if policy is None else policy
@@ -776,6 +808,14 @@ def plan_dependency_overlay(
             blocked_changes.append(name)
             reasons.append(f"{name} 涉及 GPU/运行时依赖，必须更新完整环境")
             continue
+        if name in target and installed_versions and name in installed_versions:
+            from packaging.requirements import Requirement, InvalidRequirement
+            try:
+                requirement = Requirement(target[name])
+                if not requirement.extras and not requirement.marker and not requirement.url and requirement.specifier.contains(installed_versions[name], prereleases=False):
+                    continue
+            except (InvalidRequirement, ValueError):
+                pass
         if name in allowed and name in target:
             pin = re.fullmatch(
                 r"([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*"
@@ -880,8 +920,9 @@ def prepare_comfyui_update(
     release_payload: Mapping[str, object] | None = None,
     operation_id: str | None = None,
     policy: Mapping[str, object] | None = None,
-    opener: Callable[..., object] = urlopen,
+    opener: Callable[..., object] | None = None,
     progress_callback: Callable[[int, int | None], None] | None = None,
+    channel_callback=None,
 ) -> PreparedUpdate:
     """Prepare core and dependency overlay inputs; never alter the live ComfyUI tree."""
     policy = load_update_policy() if policy is None else policy
@@ -915,7 +956,7 @@ def prepare_comfyui_update(
         release = (
             validate_latest_release(release_payload, policy)
             if release_payload is not None
-            else fetch_latest_release(policy, opener=opener)
+            else fetch_latest_release(policy, opener=opener, channel_callback=channel_callback)
         )
     except Exception as exc:
         _attach_cleanup_notes(exc, cleanup_warnings)
@@ -941,7 +982,10 @@ def prepare_comfyui_update(
                 "archive_sha256": "",
                 "archive_size": 0,
                 "current_version": current_version,
-                "immutable": True,
+                "immutable": release.source == 'github',
+                "source": release.source,
+                "source_git": release.source_git,
+                "commit": release.commit,
             },
             dependency_plan=empty_plan,
             cleanup_warnings=tuple(cleanup_warnings),
@@ -954,6 +998,7 @@ def prepare_comfyui_update(
             policy=policy,
             opener=opener,
             progress_callback=progress_callback,
+            channel_callback=channel_callback,
         )
         safe_extract_release_archive(archive, staging, policy=policy)
         dependency_plan = plan_dependency_overlay(
@@ -995,7 +1040,10 @@ def prepare_comfyui_update(
             "archive_sha256": download.sha256,
             "archive_size": download.bytes_downloaded,
             "current_version": current_version,
-            "immutable": True,
+            "immutable": release.source == 'github',
+            "source": release.source,
+            "source_git": release.source_git,
+            "commit": release.commit,
         }
     except Exception as exc:
         shutil.rmtree(staging, ignore_errors=True)

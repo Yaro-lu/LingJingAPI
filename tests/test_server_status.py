@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from app import server
+from app.config import Config
 from app.core.runtime_package import REQUIRED_RUNTIME_PATHS
 from app.core.workflow_dependencies import clear_model_index_cache
 from app.workflow_registry import WorkflowDef
@@ -38,6 +39,52 @@ class ServerStatusTests(unittest.TestCase):
             encoding="utf-8"
         ).strip()
         self.assertEqual(server.APP_VERSION, expected)
+
+    def test_output_lookup_accepts_files_below_the_mapped_output_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir) / "client"
+            mapped = Path(temp_dir) / "外部生成结果"
+            expected = mapped / "任务一" / "result.png"
+            expected.parent.mkdir(parents=True)
+            expected.write_bytes(b"image")
+            local_config = Config(base)
+            local_config.set_directory_mapping("outputs", mapped)
+
+            with (
+                mock.patch.object(server, "BASE_DIR", base),
+                mock.patch.object(server, "config", local_config),
+            ):
+                result = server._find_output_file_from_record(
+                    "task-1",
+                    "result.png",
+                    {"subfolder": "任务一"},
+                )
+
+            self.assertEqual(result, expected.resolve())
+
+    def test_local_model_status_uses_the_mapped_model_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir) / "client"
+            mapped = Path(temp_dir) / "外部模型"
+            for spec in FIXTURE_REQUIREMENTS.values():
+                target = mapped / spec["items"][0]["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"12345")
+            local_config = Config(base)
+            local_config.set_directory_mapping("models", mapped)
+
+            with (
+                mock.patch.object(server, "BASE_DIR", base),
+                mock.patch.object(server, "config", local_config),
+            ):
+                status = server._local_model_status(
+                    requirements=FIXTURE_REQUIREMENTS
+                )
+
+            self.assertEqual(
+                status,
+                {"qwen35": True, "flux2": True, "wan21": True},
+            )
 
     def test_stale_public_url_is_hidden_while_tunnel_is_offline(self):
         fake_state = SimpleNamespace(

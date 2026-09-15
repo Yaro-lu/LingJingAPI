@@ -27,6 +27,10 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+.build-tools/
+.tmp/
+.codex/
+AGENTS.md
 *.spec
 *.7z
 *.zip

@@ -4,6 +4,7 @@
 param(
     [string]$Version = "",
     [string]$SourceRoot = "",
+    [string]$OutputRoot = "",
     [string]$PackageBaseName = "runtime-nvidia-rtx20plus-cu130",
     [string]$Repository = "Yaro-lu/LingJingAPI",
     [switch]$ValidateOnly
@@ -34,7 +35,7 @@ $RuntimeSourceRoot = if ($SourceRoot) {
 else {
     $ProjectDir
 }
-$DistDir = Join-Path $ProjectDir "dist"
+$DistDir = if ($OutputRoot) { [System.IO.Path]::GetFullPath($OutputRoot) } else { Join-Path $ProjectDir "dist" }
 $PackageName = "$PackageBaseName-v$Version.7z"
 $ArchivePath = Join-Path $DistDir $PackageName
 $HashPath = "$ArchivePath.sha256"
@@ -88,10 +89,14 @@ function Test-ExcludedRelativePath {
     $segments = @($normal.Split('\', [System.StringSplitOptions]::RemoveEmptyEntries))
     $leaf = if ($segments.Count) { $segments[-1] } else { "" }
 
-    if ($segments | Where-Object { $_ -in @('.git', '.gitnexus', '__pycache__') }) {
+    if ($segments | Where-Object { $_ -in @('.git', '.gitnexus', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache') }) {
         return $true
     }
     if ($leaf -match '(?i)\.(pyc|pyo)$') {
+        return $true
+    }
+    if ($leaf -match '(?i)^\.env(?:\..*)?$|\.(key|token|pfx|p12)$' -or
+        $leaf -in @('extra_model_paths.yaml', '.lingjing-model-mappings.json', 'config.local.txt')) {
         return $true
     }
     if ($leaf -match '(?i)^(session|account_session|client_instance|workflow_config|config\.local)\.json$') {
@@ -375,6 +380,12 @@ try {
     Copy-SanitizedTree -Source (Join-Path $RuntimeSourceRoot 'runtime\ComfyUI') -Destination (Join-Path $StageRoot 'runtime\ComfyUI') -Profile ComfyUI
     Copy-RequiredFile -Source (Join-Path $RuntimeSourceRoot 'bin\cloudflared.exe') -Destination (Join-Path $StageRoot 'bin\cloudflared.exe')
 
+    Write-Step "Removing superseded dependency copies from staging"
+    & (Join-Path $RuntimeSourceRoot 'runtime\python\python.exe') -s -B `
+        (Join-Path $ScriptDir 'prune_shadowed_runtime.py') --stage $StageRoot `
+        --report (Join-Path $DistDir 'runtime-dedup-report.json')
+    if ($LASTEXITCODE -ne 0) { throw "Runtime dependency deduplication failed" }
+
     Write-Step "Creating $PackageName with $($tool.Kind)"
     Push-Location $StageRoot
     try {
@@ -400,8 +411,8 @@ try {
     Assert-ArchivePolicy -Members $members
 
     $archive = Get-Item -LiteralPath $ArchivePath
-    if ($archive.Length -ge 2000MB) {
-        throw "Release asset is $([Math]::Round($archive.Length / 1MB, 0)) MiB; it exceeds the safety limit below GitHub's 2 GiB hard limit."
+    if ($archive.Length -ge 2GB) {
+        throw "Release asset is $([Math]::Round($archive.Length / 1MB, 0)) MiB; GitHub requires each asset to be below 2 GiB."
     }
 
     $hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()

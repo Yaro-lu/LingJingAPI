@@ -30,11 +30,13 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 BASE_DIR = Path(__file__).parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+from app.core.single_user_assets import gateway_id, save_record, load_record, image_preview, lan_urls, private_host
 
 try:
     APP_VERSION = (BASE_DIR / "VERSION").read_text(encoding="utf-8").strip()
@@ -48,6 +50,7 @@ from app.core.model_maintenance import MODEL_REQUIREMENTS, check_model_groups  #
 from app.core.runtime_package import REQUIRED_RUNTIME_PATHS, missing_runtime_paths  # noqa: E402
 from app.core.runtime_state import RuntimeState  # noqa: E402
 from app.core.workflow_dependencies import workflow_dependency_report  # noqa: E402
+from app.core.workflow_adaptation import graph_hash, prepare_mapped_graph, text_roles, video_timing  # noqa: E402
 from app.workflow_registry import WorkflowRegistry  # noqa: E402
 from app.tunnel.cloudflared_manager import CloudflaredManager  # noqa: E402
 from app.engines.comfyui_client import ComfyUIClient  # noqa: E402
@@ -57,6 +60,51 @@ config: Optional[Config] = None
 state: Optional[RuntimeState] = None
 registry: Optional[WorkflowRegistry] = None
 tunnel: Optional[CloudflaredManager] = None
+
+
+def _configured_directory(name: str) -> Path:
+    active_config = config
+    try:
+        if (
+            active_config is None
+            or active_config.base_dir.resolve(strict=False) != BASE_DIR.resolve(strict=False)
+        ):
+            active_config = Config(BASE_DIR)
+    except (OSError, RuntimeError):
+        active_config = Config(BASE_DIR)
+    return active_config.directory(name)
+
+
+def _models_dir() -> Path:
+    return _configured_directory("models")
+
+
+def _workflows_dir() -> Path:
+    return _configured_directory("workflows")
+
+
+def _outputs_dir() -> Path:
+    return _configured_directory("outputs")
+
+
+def _output_roots() -> list[Path]:
+    roots = [
+        _outputs_dir(),
+        BASE_DIR / "outputs",
+        BASE_DIR / "runtime" / "outputs",
+    ]
+    unique = []
+    seen = set()
+    for root in roots:
+        try:
+            key = str(root.resolve(strict=False)).casefold()
+        except (OSError, RuntimeError):
+            key = str(root).casefold()
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
 
 # 当前任务状态（由后台线程写入，/health 读取）
 current_task: dict = {}
@@ -163,7 +211,7 @@ def _workflow_type(
 
 def _workflow_json_data(w) -> dict:
     try:
-        folder = getattr(w, "folder", None) or BASE_DIR / "workflows" / getattr(w, "id", "")
+        folder = getattr(w, "folder", None) or _workflows_dir() / getattr(w, "id", "")
         path = Path(folder) / "workflow.json"
         if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
             return {}
@@ -188,7 +236,7 @@ def _workflow_has_image_input(w) -> bool:
 
 def _workflow_json_path_for_body(w, body: dict) -> Path:
     """Select a safe same-folder API graph for optional workflow variants."""
-    folder = Path(getattr(w, "folder", None) or BASE_DIR / "workflows" / getattr(w, "id", ""))
+    folder = Path(getattr(w, "folder", None) or _workflows_dir() / getattr(w, "id", ""))
     variants = getattr(w, "workflow_variants", {}) or {}
     variant_key = "image_to_image" if body.get("image") else "text_to_image"
     filename = str(variants.get(variant_key) or "workflow.json").strip()
@@ -211,7 +259,8 @@ def _default_input_schema(workflow_type: str) -> dict:
             "inputs": [
                 {"name": "prompt", "type": "text", "label": "提示词", "required": True},
                 {"name": "negative_prompt", "type": "text", "label": "反向提示词", "required": False},
-                {"name": "size", "type": "string", "label": "尺寸", "required": False},
+                {"name": "width", "type": "integer", "label": "宽度（像素）", "required": False, "minimum": 64, "maximum": 8192},
+                {"name": "height", "type": "integer", "label": "高度（像素）", "required": False, "minimum": 64, "maximum": 8192},
                 {"name": "seed", "type": "integer", "label": "随机种子", "required": False},
             ],
         },
@@ -223,7 +272,8 @@ def _default_input_schema(workflow_type: str) -> dict:
             "inputs": [
                 {"name": "prompt", "type": "text", "label": "提示词", "required": True},
                 {"name": "image", "type": "image", "label": "参考图片", "required": False},
-                {"name": "size", "type": "string", "label": "尺寸", "required": False},
+                {"name": "width", "type": "integer", "label": "宽度（像素）", "required": False, "minimum": 64, "maximum": 8192},
+                {"name": "height", "type": "integer", "label": "高度（像素）", "required": False, "minimum": 64, "maximum": 8192},
                 {"name": "seed", "type": "integer", "label": "随机种子", "required": False},
             ],
         },
@@ -279,7 +329,10 @@ def _normalize_input_schema(schema: dict, workflow_type: str) -> dict:
         return base
     merged = {**base, **schema}
     if isinstance(schema.get("inputs"), list) and schema.get("inputs"):
-        merged["inputs"] = schema["inputs"]
+        merged["inputs"] = [
+            {k: v for k, v in field.items() if field.get("type") != "image" or k not in {"options", "default"}}
+            for field in schema["inputs"]
+        ]
     if not isinstance(merged.get("required"), list):
         merged["required"] = base.get("required", [])
     if not isinstance(merged.get("optional"), list):
@@ -328,12 +381,35 @@ def _workflow_payload(w) -> dict:
     if workflow_type == "text_chat" and _workflow_has_image_input(w):
         workflow_type = "text_vision"
     input_schema = _normalize_input_schema(getattr(w, "input_schema", {}) or {}, workflow_type)
+    if (getattr(w, "api_mapping", {}) or {}).get("api_mapping_status", "legacy") == "legacy":
+        try:
+            defaults_graph = json.loads(_workflow_json_path_for_body(w, {}).read_text(encoding="utf-8"))
+            dimensions = next((node["inputs"] for node in defaults_graph.values()
+                               if isinstance(node, dict) and "Latent" in node.get("class_type", "")
+                               and all(isinstance(node.get("inputs", {}).get(key), int) for key in ("width", "height"))), None)
+            if dimensions:
+                input_schema = {**input_schema, "inputs": [dict(field) for field in input_schema["inputs"]]}
+                for field in input_schema["inputs"]:
+                    if field.get("name") in ("width", "height"):
+                        field["default"] = dimensions[field["name"]]
+        except (OSError, ValueError, HTTPException): pass
     dependency = workflow_dependency_report(
         getattr(w, "dependencies", {}) or {},
-        BASE_DIR / "models",
+        _models_dir(),
         installed_nodes=_installed_comfy_node_types(),
     )
     workflow_data = _workflow_json_data(w)
+    if getattr(w, "output_type", "") == "video" and workflow_data:
+        timing = video_timing(workflow_data)
+        input_schema = {**input_schema, "video_timing": timing, "inputs": [dict(f) for f in input_schema["inputs"]]}
+        for field in input_schema["inputs"]:
+            key = field.get("name")
+            if key in {"fps", "duration", "frames"} and timing.get(key) is not None and "default" not in field:
+                value = timing[key]
+                # Legacy duration accepts whole seconds; custom mappings may use fractions.
+                if key == "duration" and (getattr(w, "api_mapping", {}) or {}).get("api_mapping_status", "legacy") == "legacy":
+                    value = max(1, round(value))
+                field["default"] = value
     workflow_file_ready = bool(
         workflow_data
         and any(
@@ -341,6 +417,11 @@ def _workflow_payload(w) -> dict:
             for node in workflow_data.values()
         )
     )
+    if (getattr(w, "api_mapping", {}) or {}).get("api_mapping_status", "legacy") == "legacy":
+        sizing = next((node.get("inputs", {}) for node in workflow_data.values()
+                       if isinstance(node, dict) and node.get("class_type") == "ImageScaleToTotalPixels"), None)
+        if sizing and isinstance(sizing.get("megapixels"), (int, float)):
+            input_schema = {**input_schema, "reference_sizing": {"megapixels": sizing["megapixels"], "step": sizing.get("resolution_steps", 1)}}
     dependency_status = dependency["dependency_status"]
     if not workflow_file_ready:
         validation_status = "file_error"
@@ -354,6 +435,14 @@ def _workflow_payload(w) -> dict:
         and dependency_status == "ready"
         and dependency["available"]
     )
+    mapping = getattr(w, "api_mapping", {}) or {}
+    mapping_status = mapping.get("api_mapping_status", "legacy")
+    mapping_error = mapping.get("api_mapping_error", "")
+    if mapping_status == "ready" and graph_hash(workflow_data) != mapping.get("api_graph_hash"):
+        mapping_status, mapping_error = "stale", "工作流已改变，请重新识别或手动填写参数"
+    if mapping_status not in {"legacy", "ready"}:
+        available = False
+        validation_status = mapping_status
     return {
         "id": w.id,
         "name": w.name,
@@ -379,6 +468,8 @@ def _workflow_payload(w) -> dict:
         "dependency_status": dependency_status,
         "validation_status": validation_status,
         "available": available,
+        "api_mapping_status": mapping_status,
+        "api_mapping_error": mapping_error,
     }
 
 def _model_group_for_type(model_type: str) -> str:
@@ -391,8 +482,9 @@ def _model_group_for_type(model_type: str) -> str:
 
 
 def _local_model_status(base_dir: Path | None = None, requirements: dict | None = None) -> dict:
+    models_dir = Path(base_dir) / "models" if base_dir is not None else _models_dir()
     groups = check_model_groups(
-        Path(base_dir or BASE_DIR) / "models",
+        models_dir,
         requirements or MODEL_REQUIREMENTS,
     )
     return {
@@ -570,21 +662,21 @@ def _find_output_file_from_record(task_id: str, filename: str, item: dict = None
     item = item or {}
     candidates = []
     subfolder = str(item.get("subfolder") or "").strip().replace("\\", "/")
-    if subfolder and ".." not in subfolder.split("/"):
-        candidates.append(BASE_DIR / "outputs" / subfolder / safe_name)
-    candidates.extend([
-        BASE_DIR / "outputs" / safe_name,
-        BASE_DIR / "outputs" / task_id / safe_name,
-        BASE_DIR / "runtime" / "outputs" / task_id / safe_name,
-    ])
-    roots = [
-        (BASE_DIR / "outputs").resolve(),
-        (BASE_DIR / "runtime" / "outputs").resolve(),
-    ]
+    roots = _output_roots()
+    for root in roots:
+        if subfolder and ".." not in subfolder.split("/"):
+            candidates.append(root / subfolder / safe_name)
+        candidates.extend([
+            root / safe_name,
+            root / task_id / safe_name,
+        ])
+    resolved_roots = [root.resolve(strict=False) for root in roots]
     for candidate in candidates:
         try:
             resolved = candidate.resolve()
-            if resolved.is_file() and any(_path_is_within(resolved, root) for root in roots):
+            if resolved.is_file() and any(
+                _path_is_within(resolved, root) for root in resolved_roots
+            ):
                 return resolved
         except Exception:
             continue
@@ -644,6 +736,8 @@ def _set_task_record(task_id: str, patch: dict):
         _prune_task_records_locked()
         if current_task.get("task_id") == task_id:
             current_task.update(record)
+        if record.get("status") in {"completed", "failed"}:
+            save_record(config.runtime_dir, record)
 
 
 def _prune_task_records_locked(max_records: int = MAX_TASK_RECORDS):
@@ -1122,10 +1216,17 @@ class AuthMiddleware:
             return
 
         path = scope["path"]
+        peer = (scope.get("client") or ("127.0.0.1", 0))[0]
+        if scope.get("scheme", "http") == "http" and not private_host(peer):
+            await self._error(send, 403, "https_required", "互联网访问必须使用 HTTPS")
+            return
         if str(scope.get("method") or "").upper() == "OPTIONS":
             await self.app(scope, receive, send)
             return
         if path in PUBLIC_PATHS:
+            await self.app(scope, receive, send)
+            return
+        if path == "/":
             await self.app(scope, receive, send)
             return
 
@@ -1209,7 +1310,7 @@ def create_app() -> FastAPI:
 
     registry = WorkflowRegistry(
         config_path=BASE_DIR / "runtime" / "workflow_config.json",
-        workflows_dir=BASE_DIR / "workflows",
+        workflows_dir=config.workflows_dir,
     )
     registry.scan_folder()
 
@@ -1232,12 +1333,13 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=["*"],
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Prefer", "Accept", "Range"],
         expose_headers=["Location", "Retry-After", "Preference-Applied", "Content-Range", "Accept-Ranges"],
     )
 
     def _inject_workflow_params(workflow_data: dict, body: dict):
+        roles = text_roles(workflow_data)
         prompt = body.get("prompt", "")
         response_format = body.get("response_format") or body.get("responseFormat") or {}
         wants_json = (
@@ -1304,10 +1406,8 @@ def create_app() -> FastAPI:
             if requested_frames is not None:
                 ltx_frame_length = max(1, int(requested_frames))
             elif requested_duration is not None and effective_fps is not None:
-                # LTX uses an inclusive final frame: duration * fps + 1.
-                ltx_frame_length = max(
-                    1, int(requested_duration) * int(effective_fps) + 1
-                )
+                # LTX latents need 8n+1 frames; keep the closest duration.
+                ltx_frame_length = max(1, round(int(requested_duration) * int(effective_fps) / 8) * 8 + 1)
         sync_ltx_fps = has_ltx_video and effective_fps is not None and any(
             value is not None
             for value in (requested_duration, requested_frames, requested_fps)
@@ -1337,7 +1437,7 @@ def create_app() -> FastAPI:
                 elif ctype == "CreateVideo" and "fps" in inputs:
                     inputs["fps"] = effective_fps
             if ctype == "CLIPTextEncode" and "text" in inputs:
-                if "negative" in title_lower:
+                if roles.get(str(node_id)) == "negative_prompt":
                     if has_negative_prompt:
                         inputs["text"] = negative_prompt
                 else:
@@ -1398,7 +1498,11 @@ def create_app() -> FastAPI:
         wf = registry.resolve(workflow_id)
         if wf is None:
             raise HTTPException(404, detail=f"Workflow not found: {workflow_id or '(default)'}")
-        body = _validated_generation_body(body)
+        mapping = getattr(wf, "api_mapping", {}) or {}
+        mapped = "api_mapping_status" in mapping
+        if not isinstance(body, dict):
+            raise HTTPException(422, detail="请求必须是 JSON 对象")
+        body = dict(body) if mapped else _validated_generation_body(body)
         task_id = f"task_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
         reservation = {
             "id": task_id,
@@ -1421,8 +1525,8 @@ def create_app() -> FastAPI:
             task_records[task_id] = dict(reservation)
             _prune_task_records_locked()
 
-        wf_json_path = _workflow_json_path_for_body(wf, body)
         try:
+            wf_json_path = _workflow_json_path_for_body(wf, {} if mapped else body)
             with open(wf_json_path, "r", encoding="utf-8") as f:
                 workflow_data = json.load(f)
             comfy_log_path = config.logs_dir / "comfyui.log"
@@ -1431,8 +1535,26 @@ def create_app() -> FastAPI:
             except OSError:
                 log_offset = 0
             client = ComfyUIClient(config.comfyui_url, log_path=comfy_log_path)
-            _upload_workflow_images(client, workflow_data, body, task_id)
-            _inject_workflow_params(workflow_data, body)
+            if mapped:
+                def upload_mapped_image(name, value):
+                    image_data, mime_type, extension = _decode_workflow_image(value, name=name)
+                    return client.upload_input_image(image_data, f"lingjing_{task_id}_{name}.{extension}", mime_type)
+
+                try:
+                    workflow_data = prepare_mapped_graph(
+                        workflow_data, {**mapping, "input_schema": wf.input_schema}, body, upload_mapped_image,
+                    )
+                    for field in wf.input_schema.get("inputs", []):
+                        if field["name"] in body:
+                            for target in mapping.get("api_bindings", {}).get(field["name"], []):
+                                if target["input"] in {"seed", "noise_seed"}:
+                                    inputs = workflow_data[target["node_id"]]["inputs"]
+                                    inputs[target["input"]] = _normalize_seed(inputs[target["input"]])
+                except ValueError as exc:
+                    raise HTTPException(422, detail=str(exc)) from None
+            else:
+                _upload_workflow_images(client, workflow_data, body, task_id)
+                _inject_workflow_params(workflow_data, body)
             prompt_id = client.queue_prompt(workflow_data)
         except HTTPException:
             with _task_lock:
@@ -1524,14 +1646,19 @@ def create_app() -> FastAPI:
                             continue
                         raise RuntimeError("ComfyUI 任务结束后未返回 history，无法确认输出文件")
                     missing_progress_count = 0
+                    if prog["status"] == "failed":
+                        _set_task_record(task_id, {"status": "failed", "phase": "执行失败",
+                                                  "error": prog.get("error", "ComfyUI 执行失败")})
+                        return
                     progress_high_water = _next_task_progress_percent(progress_high_water, prog)
                     _set_task_record(task_id, {
-                        "status": prog["status"],
+                        # Completion and its outputs must become visible atomically.
+                        "status": "running" if prog["status"] == "completed" else prog["status"],
                         "progress": prog["value"],
                         "progress_max": prog["max"],
                         "progress_percent": progress_high_water,
-                        "phase": prog.get("phase", ""),
-                        "progress_label": prog.get("label", prog.get("phase", "")),
+                        "phase": "读取结果" if prog["status"] == "completed" else prog.get("phase", ""),
+                        "progress_label": "读取结果" if prog["status"] == "completed" else prog.get("label", prog.get("phase", "")),
                         "elapsed": elapsed,
                         "elapsed_seconds": elapsed,
                     })
@@ -1570,7 +1697,7 @@ def create_app() -> FastAPI:
         started = time.time()
         while time.time() - started < timeout_sec:
             with _task_lock:
-                record = dict(task_records.get(task_id, {}))
+                record = dict(task_records.get(task_id, {})) or load_record(config.runtime_dir, task_id)
             status = str(record.get("status", "")).lower()
             if status in ("completed", "succeeded", "success", "done", "ready"):
                 return _task_api_response(record)
@@ -1584,7 +1711,7 @@ def create_app() -> FastAPI:
         if not safe_name or safe_name != filename:
             return None
         with _task_lock:
-            record = dict(task_records.get(task_id, {}))
+            record = dict(task_records.get(task_id, {})) or load_record(config.runtime_dir, task_id)
         if not record or str(record.get("task_id") or record.get("id") or "") != task_id:
             return None
         candidates = []
@@ -1594,14 +1721,14 @@ def create_app() -> FastAPI:
                 continue
             matched = True
             subfolder = str(item.get("subfolder") or "").strip().replace("\\", "/")
-            if subfolder and ".." not in subfolder.split("/"):
-                candidates.append(BASE_DIR / "outputs" / subfolder / safe_name)
-            elif not subfolder:
-                candidates.extend([
-                    BASE_DIR / "outputs" / safe_name,
-                    BASE_DIR / "outputs" / task_id / safe_name,
-                    BASE_DIR / "runtime" / "outputs" / task_id / safe_name,
-                ])
+            for root in _output_roots():
+                if subfolder and ".." not in subfolder.split("/"):
+                    candidates.append(root / subfolder / safe_name)
+                elif not subfolder:
+                    candidates.extend([
+                        root / safe_name,
+                        root / task_id / safe_name,
+                    ])
         if not matched:
             return None
         for candidate in candidates:
@@ -1609,10 +1736,7 @@ def create_app() -> FastAPI:
                 resolved = candidate.resolve()
                 if not resolved.is_file():
                     continue
-                roots = [
-                    (BASE_DIR / "outputs").resolve(),
-                    (BASE_DIR / "runtime" / "outputs").resolve(),
-                ]
+                roots = [root.resolve(strict=False) for root in _output_roots()]
                 if any(_path_is_within(resolved, root) for root in roots):
                     return resolved
             except Exception:
@@ -1620,6 +1744,19 @@ def create_app() -> FastAPI:
         return None
 
     # ── 路由 ──
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def client_page():
+        page = BASE_DIR / "examples" / "灵境造片厂示例页.html"
+        if not page.is_file():
+            raise HTTPException(status_code=404, detail="客户端页面文件不存在")
+        content = page.read_text(encoding="utf-8")
+        # Only the served copy uses its own origin; the standalone file stays unchanged.
+        content = content.replace(
+            'savedConnection.url || "http://127.0.0.1:18188"',
+            'window.location.origin',
+        )
+        return HTMLResponse(content)
+
     @app.get("/health")
     @app.get("/healthz")
     async def healthz():
@@ -1658,7 +1795,7 @@ def create_app() -> FastAPI:
 
         # 模型完整性检查
         checked_model_groups = check_model_groups(
-            BASE_DIR / "models",
+            config.models_dir,
             MODEL_REQUIREMENTS,
         )
         models_all_ok = bool(checked_model_groups.get("all_ok"))
@@ -1687,6 +1824,7 @@ def create_app() -> FastAPI:
             "session_id": state.session_id,
             "base_url": public_base_url,
             "local_api": state.local_api,
+            "lan_urls": lan_urls(config.server_port),
             "api": {"status": "online", "port": config.server_port},
             "tunnel": {
                 "provider": "cloudflare_quick_tunnel",
@@ -1729,11 +1867,27 @@ def create_app() -> FastAPI:
 
     @app.get("/v1/workflows")
     @app.get("/v1/workflows/list")
-    async def list_workflows():
+    async def list_workflows(summary: bool = False, available_only: bool = False):
+        workflows = registry.workflows
+        if available_only:
+            payloads = await asyncio.to_thread(lambda: [_workflow_payload(w) for w in workflows])
+            workflows = [w for w, payload in zip(workflows, payloads) if payload.get("available")]
+        if summary:
+            return {"workflows": [{"id": w.id, "name": w.name} for w in workflows], "gateway_id": gateway_id(config.runtime_dir), "lan_urls": lan_urls(config.server_port)}
         return {
-            "workflows": [_workflow_payload(w) for w in registry.workflows],
+            "workflows": [_workflow_payload(w) for w in workflows],
             "default_workflow": registry.default_workflow_id,
         }
+
+    @app.get("/v1/workflows/{workflow_id}/schema")
+    async def workflow_schema(workflow_id: str):
+        workflow = next((w for w in registry.workflows if w.id == workflow_id), None)
+        if workflow is None:
+            raise HTTPException(404, detail="工作流不存在，请刷新列表")
+        payload = await asyncio.to_thread(_workflow_payload, workflow)
+        keys = ("id", "name", "description", "input_schema", "output_type", "available",
+                "validation_status", "api_mapping_status", "api_mapping_error")
+        return {k: payload[k] for k in keys}
 
     @app.post("/v1/workflows/reload")
     @app.post("/v1/workflows/rescan")
@@ -1806,6 +1960,8 @@ def create_app() -> FastAPI:
 
     def _short_workflow_body(workflow, body: dict) -> dict:
         normalized = dict(body)
+        if "api_mapping_status" in (getattr(workflow, "api_mapping", {}) or {}):
+            return normalized
         output_type = str(getattr(workflow, "output_type", "") or "").lower()
         if output_type == "image":
             width, height = _size_to_dimensions(normalized)
@@ -2006,10 +2162,23 @@ def create_app() -> FastAPI:
     @app.get("/v1/tasks/{task_id}")
     async def get_task(task_id: str):
         with _task_lock:
-            record = dict(task_records.get(task_id, {}))
+            record = dict(task_records.get(task_id, {})) or load_record(config.runtime_dir, task_id)
         if not record:
             raise HTTPException(404, detail="Task not found")
         return _task_api_response(record)
+
+    @app.get("/v1/files/{task_id}/{filename}/preview")
+    async def get_preview(task_id: str, filename: str):
+        source = _find_output_file(task_id, filename)
+        if not source:
+            raise HTTPException(404, detail="Output file not found")
+        if source.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm", ".mov", ".mkv", ".avi"}:
+            raise HTTPException(415, detail="该文件没有图片预览，请点击加载原文件")
+        try:
+            target = await asyncio.to_thread(image_preview, source)
+        except Exception:
+            raise HTTPException(415, detail="无法生成预览，请点击加载原文件")
+        return FileResponse(str(target), media_type="image/webp")
 
     @app.get("/v1/files/{task_id}/{filename}")
     async def get_file(task_id: str, filename: str):
@@ -2021,6 +2190,23 @@ def create_app() -> FastAPI:
             filename=file_path.name,
             media_type=_guess_media_type(file_path.name),
         )
+
+    @app.delete("/v1/files/{task_id}/{filename}")
+    async def delete_generated_file(task_id: str, filename: str):
+        """Delete only a media output registered to a completed generation task."""
+        file_path = _find_output_file(task_id, filename)
+        with _task_lock:
+            record = task_records.get(task_id, {}) or load_record(config.runtime_dir, task_id)
+            if record.get("status") != "completed":
+                raise HTTPException(409, detail="只能删除已完成任务的生成文件")
+            if not file_path:
+                raise HTTPException(404, detail="Output file not found")
+            if file_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm", ".mov"}:
+                raise HTTPException(403, detail="仅允许删除生成的图片或视频")
+            file_path.unlink()
+            record["outputs"] = [item for item in record.get("outputs", []) if item.get("filename") != filename]
+            save_record(config.runtime_dir, record)
+        return {"deleted": True, "task_id": task_id, "filename": filename}
 
     @app.post("/api/v3/images/generations")
     async def ark_compatible_image_generation(request: Request):
@@ -2069,6 +2255,15 @@ def create_app() -> FastAPI:
             workflow_body["steps"] = body.get("steps")
         if body.get("image"):
             workflow_body["image"] = body.get("image")
+
+        selected_workflow = registry.resolve(workflow_id)
+        if selected_workflow and "api_mapping_status" in (getattr(selected_workflow, "api_mapping", {}) or {}):
+            names = {f["name"] for f in selected_workflow.input_schema.get("inputs", [])}
+            workflow_body = {key: value for key, value in body.items() if key in names}
+            if body.get("size"):
+                for key, value in (("width", width), ("height", height)):
+                    if key in names and key not in workflow_body:
+                        workflow_body[key] = value
 
         try:
             submitted = await asyncio.to_thread(
@@ -2153,7 +2348,7 @@ def start_tunnel(cfg):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Local AI API Gateway")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--no-tunnel", action="store_true")
     args = parser.parse_args()

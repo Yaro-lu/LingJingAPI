@@ -64,6 +64,23 @@ class ConsoleServiceTests(unittest.TestCase):
         )
         app._ensure_health_polling.assert_called_once()
 
+    def test_regular_health_update_checks_workflow_panel_for_state_changes(self):
+        app = self._app()
+        app._last_health = {}
+        app._update_status = mock.Mock()
+        app._update_workflow_display = mock.Mock()
+        app._dashboard_pages = mock.Mock()
+        app._update_task_display = mock.Mock()
+        data = {"workflows": [{"id": "unchanged"}], "current_task": None}
+
+        app._on_health_update(data)
+
+        self.assertIs(app._last_health, data)
+        app._update_status.assert_called_once_with(data)
+        app._update_workflow_display.assert_called_once_with(data)
+        app._dashboard_pages.refresh.assert_called_once_with(data)
+        app._update_task_display.assert_called_once_with(None)
+
     def test_backend_python_disables_user_site_packages(self):
         app = self._app()
 

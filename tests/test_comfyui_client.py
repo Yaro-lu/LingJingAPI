@@ -5,6 +5,21 @@ from app.engines.comfyui_client import ComfyUIClient
 
 
 class ComfyUIClientTimeoutTests(unittest.TestCase):
+    def test_failed_history_is_not_success(self):
+        client = ComfyUIClient()
+        with mock.patch.object(client, "get_queue_status", return_value={}), mock.patch.object(
+            client, "get_history", return_value={"p": {"status": {
+                "status_str": "error", "messages": [["execution_error", {
+                    "node_type": "TextGenerate", "exception_message": "HostBuffer.read_file_slice failed"}]]}}}
+        ):
+            result = client.get_progress("p")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("HostBuffer.read_file_slice failed", result["error"])
+
+    def test_preview_any_text_is_returned(self):
+        result = ComfyUIClient().get_output_files({"outputs": {"5": {"text": ["你好"]}}})
+        self.assertEqual(result[0]["text"], "你好")
+
     def test_history_requests_have_a_finite_timeout(self):
         response = mock.Mock()
         response.json.return_value = {}

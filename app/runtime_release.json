@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "version": "1.0.0",
-  "release_tag": "v1.0.0",
-  "package_name": "runtime-nvidia-rtx20plus-cu130-v1.0.0.7z",
-  "size_bytes": 2026780758,
-  "sha256": "8bba2801e5ba93dbfd6e0396acef6f5958b074e56e946e32ec1687ff49d3c2b4",
-  "download_url": "https://github.com/Yaro-lu/LingJingAPI/releases/download/v1.0.0/runtime-nvidia-rtx20plus-cu130-v1.0.0.7z",
+  "version": "2.0.0",
+  "release_tag": "v2.0.0",
+  "package_name": "runtime-nvidia-rtx20plus-cu130-v2.0.0.7z",
+  "size_bytes": 2125379992,
+  "sha256": "93017865a3886317265e73203617f1358fad4de00f0584bebc22416602af06a6",
+  "download_url": "https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/runtime-nvidia-rtx20plus-cu130-v2.0.0.7z",
   "homepage_url": "https://github.com/Yaro-lu/LingJingAPI"
 }

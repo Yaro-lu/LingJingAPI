@@ -52,6 +52,21 @@ class RuntimeMaintenanceTests(unittest.TestCase):
         self.assertTrue(sources[0][1].startswith("https://hf-mirror.com/"))
         self.assertEqual(sources[1], ("官方源", official))
 
+    def test_finished_model_download_triggers_one_model_status_recheck(self):
+        app = self._app()
+        app._release_model_transfer = mock.Mock()
+        app._set_model_download_status = mock.Mock()
+        app._footer_label = mock.Mock()
+        control = {"state": "downloading", "worker": mock.Mock()}
+
+        with mock.patch.object(threading, "Thread") as thread:
+            app._finish_model_download(control)
+
+        self.assertEqual(control["state"], "done")
+        self.assertEqual(control["progress_percent"], 100.0)
+        thread.assert_called_once_with(target=app._recheck_models, daemon=True)
+        thread.return_value.start.assert_called_once_with()
+
     def test_system_environment_rejects_pre_cuda_13_driver(self):
         result = main_gateway._check_system_env(
             lambda *args, **kwargs: mock.Mock(

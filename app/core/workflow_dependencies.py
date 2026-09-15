@@ -33,7 +33,7 @@ _MODEL_INPUT_HINTS = (
 _INDEX_CACHE_SECONDS = 10.0
 _MAX_DEPENDENCIES = 4096
 _MAX_DEPENDENCY_TEXT = 512
-_MODEL_METADATA_KEYS = {"sha256", "size_bytes", "category"}
+_MODEL_METADATA_KEYS = {"sha256", "size_bytes", "category", "directory", "url", "download_url"}
 _index_lock = threading.Lock()
 _index_cache: dict[str, tuple[float, dict[str, list[tuple[str, int]]], dict[str, int]]] = {}
 
@@ -219,6 +219,18 @@ def model_file_index(
                 relative_paths[relative] = size
                 names.setdefault(filename.lower(), []).append((relative, size))
 
+    from app.core.model_mappings import read_mappings
+    for relative, source in read_mappings(models_dir).items():
+        try:
+            if not Path(source).is_file():
+                continue
+            size = Path(source).stat().st_size
+            if size <= 0 or relative.lower() in relative_paths:
+                continue
+            relative_paths[relative.lower()] = size
+            names.setdefault(Path(relative).name.lower(), []).append((relative.lower(), size))
+        except OSError:
+            continue
     with _index_lock:
         _index_cache[key] = (
             now,

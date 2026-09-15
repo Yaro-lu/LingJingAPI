@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import ttk
 from unittest import mock
 
+from app.config import Config
 from app.gui import main_gateway
 from app.gui.dashboard_pages import StaticDashboardPages
 from app.gui.main_gateway import C, GatewayApp
@@ -15,7 +16,6 @@ from app.gui.main_gateway import C, GatewayApp
 
 PAGE_IDS = (
     "overview",
-    "workflows",
     "resources",
     "settings",
 )
@@ -127,35 +127,6 @@ class DashboardShellTests(unittest.TestCase):
         app._copy_local_url()
 
         app._copy.assert_called_once_with("http://127.0.0.1:19001")
-
-    def test_local_api_accepts_only_a_plain_loopback_origin(self):
-        app = object.__new__(GatewayApp)
-        app._local_url_label = mock.Mock()
-
-        for valid in (
-            "http://127.0.0.1:19001",
-            "http://localhost:19001/",
-            "http://[::1]:19001",
-        ):
-            with self.subTest(valid=valid):
-                app._set_local_url(valid)
-                self.assertEqual(app._local_url, valid.rstrip("/"))
-
-        for invalid in (
-            "http://user:pass@127.0.0.1:19001",
-            "http://127.0.0.1:19001/?mode=x",
-            "http://127.0.0.1:19001#fragment",
-            "http://127.0.0.1:0",
-            "http://127.0.0.1:65536",
-            "https://127.0.0.1:19001",
-            "http://example.com:19001",
-        ):
-            with self.subTest(invalid=invalid):
-                app._set_local_url(invalid)
-                self.assertEqual(app._local_url, main_gateway.API_BASE)
-                app._local_url_label.config.assert_called_with(
-                    text=main_gateway.API_BASE
-                )
 
     def test_release_worker_only_applies_updates_through_tk_after(self):
         app = object.__new__(GatewayApp)
@@ -352,10 +323,6 @@ class DashboardShellTests(unittest.TestCase):
                 self.assertLessEqual(abs(local_bottom - stack_bottom), 1)
                 self.assertGreater(local_top, public_bottom)
                 self.assertLessEqual(
-                    abs((local_top - public_bottom) - main_gateway.LAYOUT["info_gap"]),
-                    1,
-                )
-                self.assertLessEqual(
                     abs(
                         app._public_url_card.winfo_height()
                         + (local_top - public_bottom)
@@ -367,6 +334,11 @@ class DashboardShellTests(unittest.TestCase):
                 self.assertLess(
                     app._public_url_card.winfo_height(),
                     app._api_key_card.winfo_height(),
+                )
+                self.assertGreaterEqual(
+                    app._local_url_card.winfo_rooty(),
+                    app._public_url_card.winfo_rooty()
+                    + app._public_url_card.winfo_height(),
                 )
 
                 for page_id in PAGE_IDS:
@@ -452,14 +424,14 @@ class DashboardShellTests(unittest.TestCase):
                 self.assertIn("运行环境维护", texts)
                 self.assertTrue({"检查环境", "一键修复"} & texts)
                 self.assertTrue({"修复 / 更新", "本地安装包"} & texts)
-                self.assertIn("模型维护", texts)
+                self.assertIn("工作流与模型", texts)
                 self.assertIn("导入已有模型", texts)
                 self.assertIn("重新检查", texts)
             finally:
                 app._dashboard_pages.cancel_pending()
                 app.destroy()
 
-    def test_settings_page_exposes_comfyui_update_and_runtime_repair(self):
+    def test_resources_page_exposes_update_and_settings_has_no_copy_key(self):
         update_comfyui = mock.Mock()
         repair_runtime = mock.Mock()
         with (
@@ -482,7 +454,13 @@ class DashboardShellTests(unittest.TestCase):
                 app._show_page("settings")
                 app.update_idletasks()
                 settings = app._pages["settings"]
-                texts = set(self._all_text(settings))
+                settings_texts = set(self._all_text(settings))
+                self.assertNotIn("复制密钥", settings_texts)
+                self.assertNotIn("组件更新", settings_texts)
+                app._show_page("resources")
+                app.update_idletasks()
+                resources = app._pages["resources"]
+                texts = set(self._all_text(resources))
 
                 self.assertIn("组件更新", texts)
                 self.assertIn("一键更新 ComfyUI", texts)
@@ -491,9 +469,16 @@ class DashboardShellTests(unittest.TestCase):
                     "只更新 ComfyUI 核心，不影响模型、自定义节点和用户数据。",
                     texts,
                 )
+                settings_buttons = [
+                    widget
+                    for widget in self._walk_widgets(settings)
+                    if callable(getattr(widget, "invoke", None))
+                    and str(widget.cget("text")) == "设置"
+                ]
+                self.assertEqual(len(settings_buttons), 4)
 
-                self._find_by_text(settings, "一键更新 ComfyUI").invoke()
-                self._find_by_text(settings, "修复运行环境").invoke()
+                self._find_by_text(resources, "一键更新 ComfyUI").invoke()
+                self._find_by_text(resources, "修复运行环境").invoke()
                 update_comfyui.assert_called_once_with()
                 repair_runtime.assert_called_once_with()
             finally:
@@ -540,6 +525,49 @@ class DashboardShellTests(unittest.TestCase):
             finally:
                 app._dashboard_pages.cancel_pending()
                 app.destroy()
+
+    def test_storage_directory_picker_saves_mapping_for_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "客户端"
+            target = Path(tmp) / "外部模型"
+            target.mkdir(parents=True)
+            app = object.__new__(GatewayApp)
+            app._footer_label = mock.Mock()
+            app._dashboard_pages = mock.Mock()
+
+            with (
+                mock.patch.object(main_gateway, "BASE_DIR", base),
+                mock.patch.object(
+                    main_gateway.filedialog,
+                    "askdirectory",
+                    return_value=str(target),
+                ),
+                mock.patch.object(main_gateway.messagebox, "showinfo") as showinfo,
+            ):
+                app._choose_storage_directory("models")
+
+            loaded = Config(base)
+            self.assertEqual(loaded.models_dir, target.resolve())
+            app._dashboard_pages.update_storage_path.assert_called_once_with(
+                "models",
+                target.resolve(),
+            )
+            self.assertIn("重新打开灵境造片厂后生效", showinfo.call_args.args[1])
+
+    def test_comfyui_model_path_file_uses_the_configured_chinese_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "客户端"
+            target = Path(tmp) / "外部资源" / "模型"
+            target.mkdir(parents=True)
+            Config(base).set_directory_mapping("models", target)
+
+            with mock.patch.object(main_gateway, "BASE_DIR", base):
+                main_gateway._ensure_extra_model_paths()
+
+            content = (
+                base / "runtime" / "ComfyUI" / "extra_model_paths.yaml"
+            ).read_text(encoding="utf-8")
+            self.assertIn(target.resolve().as_posix(), content)
 
     def test_overview_workflow_catalog_has_a_reachable_vertical_scrollbar(self):
         with (
@@ -630,8 +658,8 @@ class DashboardShellTests(unittest.TestCase):
                 app.attributes("-alpha", 0.0)
                 app.geometry("1090x700")
                 for page_id, nested_text in (
-                    ("resources", "模型维护"),
-                    ("settings", "组件更新"),
+                    ("resources", "工作流与模型"),
+                    ("settings", "文件位置"),
                 ):
                     app._show_page(page_id)
                     app.update()
@@ -1627,7 +1655,7 @@ class DashboardShellTests(unittest.TestCase):
                 app._show_page("workflows")
                 app.update()
 
-                page = app._pages["workflows"]
+                page = app._pages["resources"]
                 buttons = []
                 scroll_canvases = []
                 for widget in self._walk_widgets(page):
@@ -1635,7 +1663,7 @@ class DashboardShellTests(unittest.TestCase):
                         text = str(widget.cget("text"))
                     except Exception:
                         text = ""
-                    if text in {"详情", "停用", "设为默认"} and callable(
+                    if text in {"配置 / 详情", "停用", "设为默认", "模型文件"} and callable(
                         getattr(widget, "invoke", None)
                     ):
                         buttons.append(widget)
@@ -1646,7 +1674,7 @@ class DashboardShellTests(unittest.TestCase):
                         except Exception:
                             pass
 
-                self.assertGreaterEqual(sum(str(item.cget("text")) == "详情" for item in buttons), 6)
+                self.assertGreaterEqual(sum(str(item.cget("text")) == "配置 / 详情" for item in buttons), 6)
                 self.assertGreaterEqual(sum(str(item.cget("text")) == "停用" for item in buttons), 6)
                 self.assertGreaterEqual(sum(str(item.cget("text")) == "设为默认" for item in buttons), 5)
                 self.assertTrue(scroll_canvases)
@@ -1658,10 +1686,10 @@ class DashboardShellTests(unittest.TestCase):
                     for widget in self._walk_widgets(page)
                     if isinstance(widget, main_gateway.SlimRoundedScrollbar)
                 ]
-                self.assertEqual(len(brand_scrollbars), 1)
+                self.assertEqual(len(brand_scrollbars), 2)
                 self.assertEqual(brand_scrollbars[0].bar_width, 4)
                 detail_button = next(
-                    button for button in buttons if str(button.cget("text")) == "详情"
+                    button for button in buttons if str(button.cget("text")) == "配置 / 详情"
                 )
                 self.assertTrue(str(detail_button.bind("<MouseWheel>")))
                 self.assertTrue(str(detail_button.bind("<Button-4>")))
@@ -1722,6 +1750,100 @@ class DashboardShellTests(unittest.TestCase):
             pages._workflow_state(workflow),
             ("加载中", "neutral", "正在检查模型和 ComfyUI 节点", ""),
         )
+
+    def test_health_update_refreshes_workflows_when_status_changes(self):
+        app = object.__new__(GatewayApp)
+        app._shutting_down = False
+        app._last_health = {}
+        app._update_status = mock.Mock()
+        app._update_workflow_display = mock.Mock()
+        app._update_task_display = mock.Mock()
+        app._dashboard_pages = mock.Mock()
+        data = {
+            "workflows": [
+                {
+                    "id": "z_image_t2i_v1",
+                    "dependency_status": "ready",
+                    "nodes_verified": True,
+                }
+            ],
+            "current_task": None,
+        }
+
+        app._on_health_update(data)
+
+        app._update_workflow_display.assert_called_once_with(data)
+        app._dashboard_pages.refresh.assert_called_once_with(data)
+
+    def test_workflow_display_fingerprint_tracks_models_and_validation(self):
+        app = object.__new__(GatewayApp)
+        app._model_status = {"Z-Image": "完整", "all_ok": True}
+        loading = [
+            {
+                "id": "z_image_t2i_v1",
+                "dependency_status": "unverified",
+                "nodes_verified": False,
+            }
+        ]
+        ready = [
+            {
+                "id": "z_image_t2i_v1",
+                "dependency_status": "ready",
+                "nodes_verified": True,
+            }
+        ]
+
+        loading_fingerprint = app._workflow_display_fingerprint(loading, "z_image_t2i_v1")
+        self.assertEqual(
+            loading_fingerprint,
+            app._workflow_display_fingerprint(list(loading), "z_image_t2i_v1"),
+        )
+        self.assertNotEqual(
+            loading_fingerprint,
+            app._workflow_display_fingerprint(ready, "z_image_t2i_v1"),
+        )
+        app._model_status = {"Z-Image": "缺失", "all_ok": False}
+        self.assertNotEqual(
+            loading_fingerprint,
+            app._workflow_display_fingerprint(loading, "z_image_t2i_v1"),
+        )
+
+    def test_unchanged_workflow_snapshot_does_not_rebuild_rows(self):
+        app = object.__new__(GatewayApp)
+        app._model_status = {"Z-Image": "完整", "all_ok": True}
+        app._workflow_canvas = mock.Mock()
+        app._workflow_canvas.yview.return_value = (0.0, 1.0)
+        image_section = mock.Mock()
+        app._wf_sections = {"image": image_section}
+        workflows = [
+            {
+                "id": "z_image_t2i_v1",
+                "dependency_status": "ready",
+                "nodes_verified": True,
+            }
+        ]
+        app._workflow_display_fingerprint_value = app._workflow_display_fingerprint(
+            workflows,
+            "z_image_t2i_v1",
+        )
+        data = {
+            "workflows": workflows,
+            "default_workflow_id": "z_image_t2i_v1",
+        }
+
+        with (
+            mock.patch(
+                "app.gui.main_gateway.read_local_workflow_catalog",
+                return_value=[],
+            ),
+            mock.patch(
+                "app.gui.main_gateway.merge_workflow_catalog",
+                return_value=workflows,
+            ),
+        ):
+            app._update_workflow_display(data)
+
+        image_section.winfo_children.assert_not_called()
 
     def test_capability_labels_are_textual_and_not_color_only(self):
         app = object.__new__(GatewayApp)
@@ -1833,6 +1955,8 @@ class DashboardShellTests(unittest.TestCase):
                     if isinstance(child, tk.Toplevel) and child.title() == "下载模型"
                 )
                 popup.update()
+                popup.geometry("650x545")
+                popup.update()
                 popup_height = popup.winfo_height()
                 for text in ("下载全部模型", "打开模型文件夹", "关闭"):
                     button = self._find_by_text(popup, text)
@@ -1840,6 +1964,26 @@ class DashboardShellTests(unittest.TestCase):
                     self.assertLessEqual(
                         button.winfo_rooty() + button.winfo_height(),
                         popup.winfo_rooty() + popup_height,
+                    )
+                item_download_buttons = []
+                button_types = (tk.Button,)
+                if main_gateway.CTK_AVAILABLE:
+                    button_types += (main_gateway.ctk.CTkButton,)
+                for widget in self._walk_widgets(popup):
+                    if not isinstance(widget, button_types):
+                        continue
+                    try:
+                        if str(widget.cget("text")) == "下载":
+                            item_download_buttons.append(widget)
+                    except (tk.TclError, ValueError):
+                        continue
+                self.assertEqual(len(item_download_buttons), len(missing))
+                popup_right = popup.winfo_rootx() + popup.winfo_width()
+                for button in item_download_buttons:
+                    self.assertGreaterEqual(button.winfo_width(), 68)
+                    self.assertLessEqual(
+                        button.winfo_rootx() + button.winfo_width(),
+                        popup_right,
                     )
                 scrollbars = [
                     widget

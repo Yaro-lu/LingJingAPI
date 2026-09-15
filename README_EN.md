@@ -1,189 +1,61 @@
 [简体中文](README.md) | [English](README_EN.md)
 
-# LingJing AI Studio · 灵境造片厂
+# LingJing AI Studio 2.0
 
-> Turn a Windows RTX PC into a local AI studio—and ComfyUI workflows into APIs other software can call.
+**Generate text, images and video on a Windows PC, and expose ComfyUI workflows through a browser workspace and authenticated APIs.** Workflow and model management, environment maintenance, reference images, video duration/frame-rate controls and asynchronous results are available in one client. Actual capabilities depend on the installed workflows and models.
 
-Use one Windows client to prepare the runtime, import or select workflows, check and download required models, and generate text, images, and video locally. With configured workflows, you do not need to work directly with ComfyUI node graphs.
+## Download
 
-Apps on the same PC can call the Local API with an API Key; remote clients can use the Public URL with the same Key. Models and generated files remain on the PC by default. Available features and VRAM requirements depend on the installed workflows and models.
+### [Download Windows client 2.0.0](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/LingJingAI-Setup-2.0.0-win-x64.exe)
 
-[Download for Windows](https://github.com/Yaro-lu/LingJingAPI/releases/latest) · [Quick start](#first-time-setup) · [API reference](#api-usage) · [Chinese PDF guide](docs/灵境造片厂使用教学.pdf)
+### [Download separate NVIDIA / CUDA 13 runtime](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/runtime-nvidia-rtx20plus-cu130-v2.0.0.7z)
 
-> **Public access:** The current release attempts to establish an authenticated public Tunnel at startup. Stop the public connection or all background services when remote access is not needed.
+[Release notes and checksums](https://github.com/Yaro-lu/LingJingAPI/releases/tag/v2.0.0) · [Chinese guide (PDF)](docs/灵境造片厂使用教学.pdf) · [API examples](README.md#接口调用)
 
-## Get started in three steps
+**Neither package contains model weights, generated assets, account sessions or personal settings.** Model files are downloaded separately or mapped from an existing local directory.
 
-Install the client → repair the runtime and download required models → select a workflow and make the first request from the example page
+## Three-step walkthrough
 
-## What you can do
+1. Install the lightweight client. In **Models & Environment**, install the runtime, then download the models needed by your workflow or map existing files. Workflow configuration and model actions share one compact list.
 
-- **Generate text** for conversations, writing, and content organization.
-- **Create and edit images** with text-to-image and image-to-image workflows.
-- **Generate video** with supported keyframe and video workflows.
-- **Maintain the runtime and models** with built-in checks, repair, download, and update actions.
-- **Connect other software** through the Local API on the same computer or the Public URL for remote access; both use the same API Key.
+![Workflow and model management](docs/images/2.0/workflow-models.png)
 
-Available capabilities depend on the workflows and models installed on your computer.
+*Interface demonstration; status counters use demo data.*
 
-## Choose your path
+2. Open the local URL in a browser (normally `http://127.0.0.1:18188`), or use the LAN URL from a device on the same network. For remote access, use the public HTTPS URL. Enter the generation API Key at the top right. Connection settings are remembered in that browser.
 
-| You are | Start here |
-| --- | --- |
-| Creator | Install the client, prepare the runtime and models, then generate from the example page with an available workflow |
-| ComfyUI user | Import an existing workflow and let the client check its dependencies, models, and public inputs |
-| Developer | Use the Local API or Public URL with an API Key for text, image, video, and asynchronous task endpoints |
+![Local, LAN and public URL controls](docs/images/2.0/console.png)
 
-## First-time setup
+*Interface demonstration with placeholder public URL and Key.*
 
-1. Download and install `LingJingAI-Setup-1.0.3-win-x64.exe` from [Releases](https://github.com/Yaro-lu/LingJingAPI/releases/latest).
-2. Launch LingJing AI Studio, open **模型与环境 (Models & Runtime)**, and select **一键修复 (One-click Repair)**.
-3. Wait while the client downloads, verifies, and installs the runtime. If the network download fails, use the manual runtime package offered by the error dialog.
-4. Select **下载模型 (Download Models)** for the workflow you want to use.
-5. Choose a workflow marked **可以使用 (Available)** and set it as the default.
-6. Return to **控制台 (Dashboard)**. Use **本地 API (Local API)** on the same computer or **公网 URL (Public URL)** for remote access, together with the API Key.
-7. Open **灵境造片厂示例页 (LingJing AI Studio Example)** from the desktop, enter the URL and Key, and try a text, image, or video request.
+3. Select an available workflow, enter a prompt and generate. Images load as previews; click to fetch and enlarge the original. Video previews show the first frame and load the full video on playback. Projects group a chronological history that loads in batches.
 
-The Chinese PDF guide installed with the client contains a more detailed walkthrough.
+![Browser creation workspace](docs/images/2.0/studio.png)
 
-## Before you install
+*User-provided workspace screenshot showing generated image history and video workflow controls.*
 
-- Windows 10 22H2 or Windows 11, 64-bit.
-- NVIDIA RTX 20 series or newer with at least 8 GB of VRAM. An 8 GB card is suitable only for lightweight workflows; large workflows such as WAN 14B and LTX-2.3 have higher requirements shown in their client detail pages.
-- NVIDIA driver version 580 or newer for the current CUDA 13 runtime.
-- Enough disk space for the runtime, selected models, and generated files.
-- An SSD is strongly recommended because first model load times are substantially faster than on a mechanical drive.
+## Features in 2.0
 
-## Which file should I download?
+- Text workflows with clear system/user prompts and text or JSON response options.
+- Image generation and editing with reference images, workflow default dimensions and custom aspect ratios.
+- Video workflow duration and frame rate; frame counts are calculated to match workflow constraints.
+- Workflow-specific API documentation, schema discovery, async task progress and result downloads.
+- Workflow import and rule-based parameter recognition; optional Qwen3.5 4B assistance only when the model and backend are ready. Manual configuration remains available.
+- Unified workflow/model management, local model mapping and directory changes with scanning.
+- Local, LAN and public browser access without a separate web-hosting service.
 
-| File | Purpose |
-| --- | --- |
-| `LingJingAI-Setup-1.0.3-win-x64.exe` | Required lightweight client containing the interface and launcher components |
-| `runtime-nvidia-rtx20plus-cu130-v1.0.0.7z` | Separate runtime package; normally downloaded automatically, with manual installation as a fallback |
-| Model files | Downloaded separately for each workflow; not bundled with the client or runtime |
+## Requirements and behavior
 
-The client and runtime are released separately. Updating the client does not require downloading the whole runtime again, and neither package contains models or generated user content.
+Windows 10 22H2 or Windows 11 x64; NVIDIA RTX 20 series or newer. The CUDA 13 runtime requires R580 or newer drivers. 8 GB VRAM is suitable only for lightweight workflows; larger models need more resources. Reserve storage for the runtime, models and outputs.
 
-## Frequently asked questions
+The client attempts to create a Cloudflare Tunnel by default. API operations and generated files require a valid Key. Stop the public connection or background services when it is not needed. LAN access requires a reachable PC and a firewall rule for the listening port; guest Wi-Fi isolation may block access.
 
-### Why does a workflow still say that models are missing?
+Projects and connection settings are browser-local. This is a single-user application, without per-Key asset isolation or project sync across browsers. Changing URL or Key does not erase saved history, but original files must still be accessible on their source client. Deleting a project removes its grouping; deleting a file from the asset context menu removes that local file.
 
-Large models are not preinstalled. Workflows remain visible and list the exact files they need. After adding the files, select **重新检查 (Check Again)**.
+Generation and local management keys are separate; client-side secrets use Windows DPAPI. Browser connection storage and third-party model credentials need to be kept private. Optional platform login shares the access URL, generation Key and device/task status with the configured platform; only use a trusted platform. Signing out does not rotate a previously shared Key.
 
-### Is an internet connection always required?
+## Development and license
 
-Internet access is required when downloading the runtime and models. Once they are installed, generation itself can run locally, but the client attempts to establish a public Tunnel by default. Stop the public connection or all background services for fully offline use.
+The repository contains source, documentation, example workflows and release scripts, not an installed AI environment. With the portable environment present, use `start.bat` or `check-env.bat`. See the [Chinese README](README.md) for API examples and maintenance details.
 
-### What is the example page?
-
-It is a local, front-end-only page bundled with the client to help new users make their first request. It does not replace the client, runtime, or models. The API Key remains in the current browser session.
-
-### Where are generated files stored?
-
-They are stored in the `outputs` folder under the installation directory by default. Uninstalling removes the application, post-installed runtime, and models while preserving generated assets in `outputs`.
-
-### Is my content uploaded automatically?
-
-No content is uploaded automatically. Generation runs locally by default. When the client starts, it automatically attempts to establish an authenticated public Tunnel; only callers holding both the public URL and a valid API Key can submit jobs or retrieve the corresponding results. If public access is unnecessary, stop all background services in the client. Never publish the URL, API Key, or screenshots containing them.
-
-### What is synchronized when I sign in?
-
-Only after you actively sign in does the client send the public URL, local API Key, device name, workflow/model status, and prompt-free task progress to the server address you entered so that the platform can call this computer. Prompts and generated results are not included in this synchronization. A custom server receives credentials capable of calling the local API, so sign in only to a trusted service. All local features remain available without signing in.
-
-### Does signing out automatically revoke the old API Key?
-
-Not in this version. Signing out stops further platform synchronization but does not replace the API Key already shared with that platform. If you no longer trust it, sign out and then generate a new access key in **Settings**. After the API restarts, the previous key can no longer call the local service.
-
-## Download and open-source license
-
-- Latest version: [GitHub Releases](https://github.com/Yaro-lu/LingJingAPI/releases/latest)
-- Current client version: `1.0.3`
-- Client source code and documentation owned and licensable by the project author are released under the [Apache License 2.0](LICENSE).
-- See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for major bundled components and license notices.
-- Third-party components, external workflows, models, and assets remain governed by their respective source licenses and terms. See the [open-source license notice](开源许可说明.txt).
-
-
----
-
-## Technical notes
-
-The following section is intended for developers integrating the API, building workflows, or diagnosing the local runtime.
-
-### How it works
-
-```text
-Caller (example page / web app / backend / other software)
-        │  URL + API Key
-        ▼
-LingJing AI Studio ── workflow router ── ComfyUI / local models
-        │
-        └── Cloudflare Tunnel (attempted by default; stop background services to close it)
-```
-
-The lightweight client bundles portable Python, Tk, and 7-Zip components required to open the full interface. ComfyUI, Torch, CUDA, and Cloudflared are distributed in the separate runtime package.
-
-### API usage
-
-Replace `BASE_URL` and `API_KEY` with the values shown on the client dashboard.
-
-```bash
-curl -X POST "BASE_URL/" \
-  -H "Authorization: Bearer API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"A cat resting beside a sunny window"}'
-```
-
-To call a workflow with the public name `flux2`:
-
-```bash
-curl -X POST "BASE_URL/flux2" \
-  -H "Authorization: Bearer API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"A cinematic city at night"}'
-```
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/healthz` | Minimal unauthenticated liveness check |
-| `GET` | `/v1/status` | Full client status |
-| `GET` | `/v1/models` | List callable models |
-| `GET` | `/v1/workflows` | List callable workflows |
-| `POST` | `/v1/chat/completions` | OpenAI-compatible text endpoint |
-| `POST` | `/api/v3/images/generations` | Jimeng / Volcano-style image endpoint |
-| `POST` | `/v1/workflows/run/{workflow_id}` | Run a specific workflow |
-| `GET` | `/v1/tasks/{task_id}` | Query an asynchronous task |
-| `GET` | `/v1/files/{task_id}/{filename}` | Download a generated file |
-
-Generation requests are asynchronous by default. Submit a request to receive a task ID, then query the task for progress and results.
-
-### Workflow and model layout
-
-- Each workflow is stored under `workflows/<workflow-name>/` and contains at least `manifest.json` and `workflow.json`.
-- `manifest.json` declares the public name, output type, inputs, and model dependencies.
-- Models are stored under the root `models/` directory and their names must match the workflow references.
-- Prefer trusted `safetensors` or `GGUF` files. Do not import untrusted legacy PyTorch checkpoints.
-- Workflows, runtime files, and models are kept separate. Updating the client does not remove models.
-
-### Local launch and diagnostics
-
-When the source directory already contains the complete portable runtime:
-
-```bat
-start.bat
-```
-
-Run environment diagnostics with:
-
-```bat
-check-env.bat
-```
-
-Trae or VS Code should use `runtime\python\python.exe`. The repository's `.vscode/settings.json` pins this interpreter; the portable environment uses `.venv\Lib` only for dependencies.
-
-### Security and privacy
-
-- Generation API Keys and local administrative keys have separate permission scopes.
-- Client-generated API and local administrative keys are protected with the current user's DPAPI, and full keys are not written to logs. A third-party text-model key entered in advanced settings is currently stored in plaintext in the local configuration file; use it only on a trusted computer and never include that file in a project archive.
-- Remote account services require HTTPS by default; plain HTTP is allowed only for loopback development.
-- Release packaging uses an allowlist and excludes models, account sessions, requests, logs, and generated outputs.
-- A public URL is still an internet entry point. Keep the API Key private and never commit it to a repository or include it in public screenshots.
+Author-owned source and documentation are licensed under [Apache License 2.0](LICENSE). External workflows, models, assets and dependencies retain their original licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [license notes](开源许可说明.txt).

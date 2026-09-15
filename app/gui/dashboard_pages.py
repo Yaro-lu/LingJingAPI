@@ -79,10 +79,9 @@ def runtime_package_status(base_dir: Path) -> tuple[str, list[str]]:
 
 
 class StaticDashboardPages:
-    """Build and refresh the three secondary product pages."""
+    """Build and refresh the shared maintenance page and settings."""
 
     PAGE_BUILDERS = {
-        "workflows": "_build_workflows",
         "resources": "_build_resources",
         "settings": "_build_settings",
     }
@@ -95,6 +94,8 @@ class StaticDashboardPages:
         self._last_snapshot = ""
         self._resource_targets: dict[str, tk.Widget] = {}
         self._runtime_focus_job = None
+        self._workflow_list_canvas = None
+        self._storage_path_labels: dict[str, list[tuple[tk.Widget, int]]] = {}
 
     def build(self, parent, page_id: str) -> tk.Frame:
         if page_id not in self.PAGE_BUILDERS:
@@ -149,13 +150,29 @@ class StaticDashboardPages:
         if snapshot == self._last_snapshot:
             return
         self._last_snapshot = snapshot
-        for page_id in ("workflows", "resources", "settings"):
+        for page_id in self.PAGE_BUILDERS:
             page = self._pages.get(page_id)
             if page is None:
                 continue
+            old_canvas = getattr(page, "_scroll_canvas", None)
+            scroll_top = old_canvas.yview()[0] if old_canvas is not None else 0.0
+            list_top = self._workflow_list_canvas.yview()[0] if page_id == "resources" and self._workflow_list_canvas is not None else 0.0
             for child in page.winfo_children():
                 child.destroy()
             getattr(self, self.PAGE_BUILDERS[page_id])(page)
+            canvas = getattr(page, "_scroll_canvas", None)
+            if canvas is not None and scroll_top:
+                def restore_scroll(target=canvas, top=scroll_top):
+                    if target.winfo_exists():
+                        target.update_idletasks()
+                        target.yview_moveto(top)
+                self.app.after_idle(restore_scroll)
+            if page_id == "resources" and self._workflow_list_canvas is not None and list_top:
+                def restore_list(target=self._workflow_list_canvas, top=list_top):
+                    if target.winfo_exists():
+                        target.update_idletasks()
+                        target.yview_moveto(top)
+                self.app.after_idle(restore_list)
 
     # ── shared pieces ──────────────────────────────────────
     def _body(self, page) -> tk.Frame:
@@ -190,6 +207,7 @@ class StaticDashboardPages:
         )
         body._scroll_canvas = canvas
         body._scrollbar = scrollbar
+        page._scroll_canvas = canvas
         self._bind_mousewheel_tree(content, canvas)
         return body
 
@@ -218,6 +236,9 @@ class StaticDashboardPages:
         stack = [root]
         while stack:
             widget = stack.pop()
+            nested = getattr(widget, "_nested_scroll_canvas", None)
+            if nested is not None and nested is not canvas:
+                continue
             widget.bind("<MouseWheel>", on_mousewheel, add="+")
             widget.bind("<Button-4>", on_mousewheel, add="+")
             widget.bind("<Button-5>", on_mousewheel, add="+")
@@ -318,6 +339,27 @@ class StaticDashboardPages:
             return text
         return f"{text[:18]}...{text[-(limit - 21):]}"
 
+    def _track_storage_path_label(
+        self,
+        name: str,
+        widget: tk.Widget,
+        limit: int,
+    ):
+        self._storage_path_labels.setdefault(name, []).append((widget, limit))
+
+    def update_storage_path(self, name: str, path: Path):
+        """Show a saved mapping immediately while the services await restart."""
+        active = []
+        for widget, limit in self._storage_path_labels.get(name, []):
+            try:
+                if not widget.winfo_exists():
+                    continue
+                widget.config(text=self._short_path(path, limit))
+                active.append((widget, limit))
+            except tk.TclError:
+                continue
+        self._storage_path_labels[name] = active
+
     @staticmethod
     def _short_text(value, limit: int = 24) -> str:
         text = str(value or "")
@@ -351,6 +393,14 @@ class StaticDashboardPages:
             return
 
         self._set_card_outline(card, self.c["primary"])
+        page = self._pages.get("resources")
+        canvas = getattr(page, "_scroll_canvas", None)
+        if canvas is not None:
+            canvas.update_idletasks()
+            bounds = canvas.bbox("all")
+            if bounds and bounds[3] > 0:
+                top = card.winfo_rooty() - canvas.winfo_rooty() + canvas.canvasy(0)
+                canvas.yview_moveto(max(0, top - 36) / bounds[3])
 
         def restore(target=card):
             self._runtime_focus_job = None
@@ -379,7 +429,7 @@ class StaticDashboardPages:
             remote = []
         try:
             local = read_local_workflow_catalog(
-                BASE_DIR / "workflows",
+                self.app._storage_directory("workflows"),
                 BASE_DIR / "runtime" / "workflow_config.json",
             )
         except (OSError, ValueError):
@@ -427,7 +477,10 @@ class StaticDashboardPages:
         dependency_status = str(workflow.get("dependency_status") or "").lower()
         dependencies = workflow.get("dependencies")
         if isinstance(dependencies, dict):
-            report = workflow_dependency_report(dependencies, BASE_DIR / "models")
+            report = workflow_dependency_report(
+                dependencies,
+                self.app._storage_directory("models"),
+            )
             if not missing:
                 missing.extend(report["missing_models"])
             if not dependency_status:
@@ -457,165 +510,115 @@ class StaticDashboardPages:
             return "需要检查", "warn", "模型或依赖尚未准备完成", model_key
         return "可以使用", "success", "输入和输出已经配置完成", model_key
 
-    # ── workflows ──────────────────────────────────────────
-    def _build_workflows(self, page):
-        body = self._body(page)
+    # ── shared workflow and model list ─────────────────────
+    def _model_summary(self, model_key):
+        status = getattr(self.app, "_model_status", {})
+        missing = list((status.get("missing") or {}).get(model_key) or [])
+        if missing:
+            return f"模型缺少 {len(missing)} 个文件", "warn", True
+        if status.get(model_key) == "完整":
+            return "模型完整", "success", False
+        return "模型待检查", "neutral", True
+
+    def _build_workflow_models(self, body):
         workflows = self._workflow_records()
-        states = [self._workflow_state(item) for item in workflows]
-        ready_count = sum(1 for state, *_ in states if state == "可以使用")
-        issue_count = sum(
-            1 for state, *_ in states if state not in {"可以使用", "已停用", "加载中"}
-        )
-
-        metrics = tk.Frame(body, bg=self.c["bg"])
-        metrics.pack(fill="x", pady=(0, 14))
-        for col in range(3):
-            metrics.columnconfigure(col, weight=1, uniform="workflow_metrics")
-        self._metric(metrics, 0, "工作流", f"{len(workflows)} 个", "文字、图片与视频能力")
-        self._metric(metrics, 1, "可以使用", f"{ready_count} 个", "可直接通过 URL + Key 调用", "success")
-        self._metric(metrics, 2, "需要处理", f"{issue_count} 个", "缺少模型、节点或配置", "warn")
-
+        ready = sum(self._workflow_state(item)[0] == "可以使用" for item in workflows)
         self._section_heading(
-            body,
-            "我的工作流",
-            "点击详情查看用途、显存、内存与推荐参数",
-            actions=[
-                ("添加教程", self.app._show_workflow_tutorial, "plain"),
-                ("＋ 添加工作流", self.app._show_workflow_upload_dialog, "primary"),
-            ],
+            body, "工作流与模型", f"共 {len(workflows)} 个工作流 · {ready} 个可用",
+            actions=[("添加教程", self.app._show_workflow_tutorial, "plain")],
         )
-        listing_height = max(132, min(244, 24 + len(workflows) * 66))
-        listing = self._card(body, listing_height)
-        listing.pack(fill="x", pady=(0, 14))
+        toolbar = tk.Frame(body, bg=self.c["bg"])
+        toolbar.pack(fill="x", pady=(0, 12))
+        for index, (label, command, variant) in enumerate([
+            ("＋ 添加工作流", self.app._show_workflow_upload_dialog, "primary"),
+            ("导入已有模型", self.app._import_models, "plain"),
+            ("重新检查", self.app._start_background_model_recheck, "plain"),
+        ]):
+            self._action(toolbar, label, command, variant, 112).pack(side="left", padx=(0 if index == 0 else 8, 0))
 
-        rows_parent = listing
-        scroll_canvas = None
-        if len(workflows) > 3:
-            scroll_canvas = tk.Canvas(
-                listing,
-                bg=self.c["card"],
-                highlightthickness=0,
-                bd=0,
-            )
-            scrollbar = self.app._vertical_scrollbar(listing, scroll_canvas.yview)
-            scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=5)
-            scroll_canvas.configure(yscrollcommand=scrollbar.set)
-            scroll_canvas.pack(side="left", fill="both", expand=True, padx=(2, 0), pady=3)
-            rows_parent = tk.Frame(scroll_canvas, bg=self.c["card"])
-            rows_window = scroll_canvas.create_window((0, 0), window=rows_parent, anchor="nw")
-            rows_parent.bind(
-                "<Configure>",
-                lambda _event, canvas=scroll_canvas: canvas.configure(
-                    scrollregion=canvas.bbox("all")
-                ),
-            )
-            scroll_canvas.bind(
-                "<Configure>",
-                lambda event, canvas=scroll_canvas, window=rows_window: canvas.itemconfigure(
-                    window, width=event.width
-                ),
-            )
-
+        listing = self._card(body, min(340, max(108, len(workflows) * 76 + 12)))
+        listing.pack(fill="x", pady=(0, 18))
+        canvas = tk.Canvas(listing, bg=self.c["card"], highlightthickness=0, bd=0)
+        scrollbar = self.app._vertical_scrollbar(listing, canvas.yview)
+        scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=6)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True, padx=3, pady=4)
+        rows = tk.Frame(canvas, bg=self.c["card"])
+        window = canvas.create_window((0, 0), window=rows, anchor="nw")
+        rows.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        listing._nested_scroll_canvas = canvas
+        self._workflow_list_canvas = canvas
+        represented_models = set()
         if not workflows:
-            tk.Label(listing, text="还没有工作流", font=self.f["h2"], fg=self.c["text"], bg=self.c["card"]).pack(pady=(28, 4))
-            tk.Label(listing, text="点击右上角“添加工作流”即可开始。", font=self.f["small"], fg=self.c["muted"], bg=self.c["card"]).pack()
-        else:
-            for index, workflow in enumerate(workflows):
-                _glyph, kind, type_tone = self._workflow_type_label(workflow)
-                state, state_tone, detail, model_key = self._workflow_state(workflow)
-                tone_fg = {
-                    "primary": self.c["primary"],
-                    "success": self.c["success"],
-                    "warn": self.c["warn"],
-                }[type_tone]
-                row = tk.Frame(rows_parent, bg=self.c["card"])
-                row.pack(fill="x", padx=14, pady=(9 if index == 0 else 6, 6))
-                name_box = tk.Frame(row, bg=self.c["card"], width=180, height=44)
-                name_box.pack(side="left", fill="x", expand=True)
-                name_box.pack_propagate(False)
-                name_line = tk.Frame(name_box, bg=self.c["card"])
-                name_line.pack(fill="x", anchor="w")
-                display_name = self._short_text(
-                    workflow.get("name") or workflow.get("id") or "未命名工作流",
-                    18,
-                )
-                self._badge(name_line, kind, type_tone).pack(side="left", padx=(0, 7))
-                tk.Label(name_line, text=display_name, font=self.f["bold"], fg=self.c["text"], bg=self.c["card"]).pack(side="left")
-                if workflow.get("is_default"):
-                    self._badge(name_line, "默认", "primary").pack(side="left", padx=(7, 0))
-                intro = workflow.get("description") or workflow.get("id") or "暂无简介"
-                tk.Label(name_box, text=self._short_text(intro, 32), font=self.f["small"], fg=self.c["text2"], bg=self.c["card"]).pack(anchor="w")
-                detail_box = tk.Frame(row, bg=self.c["card"], width=174, height=44)
-                detail_box.pack(side="left", padx=(4, 8))
-                detail_box.pack_propagate(False)
-                self._badge(detail_box, state, state_tone).pack(anchor="w")
-                tk.Label(detail_box, text=self._short_text(detail, 24), font=self.f["tiny"], fg=self.c["muted"], bg=self.c["card"], anchor="w").pack(anchor="w", pady=(2, 0))
+            tk.Label(rows, text="还没有工作流，点击“添加工作流”即可开始。", font=self.f["normal"],
+                     fg=self.c["text2"], bg=self.c["card"]).pack(anchor="w", padx=16, pady=20)
+        for index, workflow in enumerate(workflows):
+            model_key = str(self.app._workflow_model_key(workflow) or "")
+            represented_models.add(model_key)
+            state, tone, detail, _ = self._workflow_state(workflow)
+            _glyph, kind, kind_tone = self._workflow_type_label(workflow)
+            row = tk.Frame(rows, bg=self.c["card"])
+            row.pack(fill="x", padx=12, pady=8)
+            actions = tk.Frame(row, bg=self.c["card"])
+            actions.pack(side="right", padx=(12, 0))
+            wf_id = str(workflow.get("id") or "")
+            enabled = bool(workflow.get("enabled", True))
+            if enabled and state not in {"文件异常", "需要检查"} and not state.startswith("缺少") and not workflow.get("is_default"):
+                self._action(actions, "设为默认", lambda key=wf_id: self.app._set_default_workflow(key),
+                             "plain", 66).pack(side="left", padx=(0, 5))
+            self._action(actions, "停用" if enabled else "启用",
+                         lambda key=wf_id, value=not enabled: self.app._set_workflow_enabled(key, value),
+                         "plain" if enabled else "primary", 52).pack(side="left", padx=(0, 5))
+            self._action(actions, "配置 / 详情", lambda item=dict(workflow): self.app._show_workflow_schema(item),
+                         "plain", 84).pack(side="left")
+            # Every workflow can resolve downloads or map existing local files.
+            self._action(actions, "模型文件", lambda item=dict(workflow): self.app._show_workflow_model_help(item),
+                         "primary" if state.startswith("缺少") else "plain", 76).pack(side="left", padx=(5, 0))
 
-                if state_tone == "warn" and model_key:
-                    self._action(
-                        row,
-                        "安装模型",
-                        lambda key=model_key: self.app._show_model_install_help(key),
-                        "primary",
-                        78,
-                    ).pack(side="right", padx=(6, 0))
-                self._action(
-                    row,
-                    "详情",
-                    lambda item=dict(workflow): self.app._show_workflow_schema(item),
-                    "plain",
-                    78,
-                ).pack(side="right")
-                workflow_id = str(workflow.get("id") or "")
-                enabled = bool(workflow.get("enabled", True))
-                self._action(
-                    row,
-                    "停用" if enabled else "启用",
-                    lambda wf_id=workflow_id, next_enabled=not enabled: self.app._set_workflow_enabled(
-                        wf_id, next_enabled
-                    ),
-                    "plain" if enabled else "primary",
-                    56,
-                ).pack(side="right", padx=(6, 0))
-                can_be_default = (
-                    enabled
-                    and state not in {"文件异常", "需要检查"}
-                    and not state.startswith("缺少")
-                )
-                if can_be_default and not workflow.get("is_default"):
-                    self._action(
-                        row,
-                        "设为默认",
-                        lambda wf_id=workflow_id: self.app._set_default_workflow(wf_id),
-                        "plain",
-                        68,
-                    ).pack(side="right", padx=(6, 0))
-                if index < len(workflows) - 1:
-                    tk.Frame(rows_parent, bg=self.c["border2"], height=1).pack(fill="x", padx=14)
+            text_box = tk.Frame(row, bg=self.c["card"], width=160, height=58)
+            text_box.pack(side="left", fill="x", expand=True)
+            text_box.pack_propagate(False)
+            heading = tk.Frame(text_box, bg=self.c["card"])
+            heading.pack(fill="x")
+            self._badge(heading, kind, kind_tone).pack(side="left", padx=(0, 7))
+            if workflow.get("is_default"):
+                self._badge(heading, "默认", "primary").pack(side="right", padx=(5, 0))
+            tk.Label(heading, text=self._short_text(workflow.get("name") or wf_id, 30), font=self.f["bold"],
+                     fg=self.c["text"], bg=self.c["card"], anchor="w").pack(side="left", fill="x", expand=True)
+            tk.Label(text_box, text=self._short_text(workflow.get("description") or "暂无简介", 56), font=self.f["small"],
+                     fg=self.c["text2"], bg=self.c["card"], anchor="w").pack(fill="x", pady=(2, 0))
+            model_note, _, _ = self._model_summary(model_key) if model_key else ("", "neutral", False)
+            note = " · ".join(part for part in (state, model_note, detail) if part)
+            tk.Label(text_box, text=self._short_text(note, 62), font=self.f["tiny"],
+                     fg=self.c["warn"] if tone in {"warn", "danger"} else self.c["muted"],
+                     bg=self.c["card"], anchor="w").pack(fill="x")
+            if index < len(workflows) - 1:
+                tk.Frame(rows, bg=self.c["border2"], height=1).pack(fill="x", padx=12)
+        self._bind_mousewheel_tree(listing, canvas)
 
-            if scroll_canvas is not None:
-                self._bind_mousewheel_tree(listing, scroll_canvas)
-
-        guide = self._card(body, 96)
-        guide.pack(fill="x")
-        left = tk.Frame(guide, bg=self.c["card"])
-        left.pack(side="left", fill="both", expand=True, padx=16, pady=13)
-        tk.Label(left, text="第一次添加工作流？", font=self.f["h2"], fg=self.c["text"], bg=self.c["card"]).pack(anchor="w")
-        tk.Label(
-            left,
-            text="导出 ComfyUI API 工作流 → 选择文件或文件夹 → 确认输入与输出；未声明的依赖会提示补充。",
-            font=self.f["small"],
-            fg=self.c["text2"],
-            bg=self.c["card"],
-        ).pack(anchor="w", pady=(5, 0))
-        self._action(guide, "查看完整教程", self.app._show_workflow_tutorial, "plain", 112).pack(side="right", padx=16)
+        remaining = [key for key in MODEL_REQUIREMENTS if key not in represented_models]
+        if remaining:
+            self._section_heading(body, "其他模型", "未关联当前工作流的模型仍可单独维护")
+            other = self._card(body)
+            other.pack(fill="x", pady=(0, 20))
+            for index, key in enumerate(remaining):
+                row = tk.Frame(other, bg=self.c["card"])
+                row.pack(fill="x", padx=16, pady=10)
+                label, tone, needs_download = self._model_summary(key)
+                if needs_download:
+                    self._action(row, "下载模型", lambda item=key: self.app._show_model_install_help(item),
+                                 "primary", 94).pack(side="right", padx=(12, 0))
+                self._badge(row, label, tone).pack(side="right", padx=(12, 0))
+                tk.Label(row, text=str(MODEL_REQUIREMENTS[key].get("title") or key), font=self.f["bold"],
+                         fg=self.c["text"], bg=self.c["card"], anchor="w").pack(side="left", fill="x", expand=True)
+                if index < len(remaining) - 1:
+                    tk.Frame(other, bg=self.c["border2"], height=1).pack(fill="x", padx=16)
 
     # ── models and environment ─────────────────────────────
     def _build_resources(self, page):
         body = self._scrollable_body(page)
-        # Keep the complete maintenance page inside the documented 700 px
-        # minimum window on Windows display scaling, where Tk may round two
-        # pixels upward compared with the nominal widget heights.
+        # Maintenance sections share this scrollable page.
         body.pack_configure(pady=(4, 12))
         runtime_state, runtime_missing = self._runtime_status()
         runtime_ok = runtime_state == "ready"
@@ -639,6 +642,8 @@ class StaticDashboardPages:
         self._metric(metrics, 0, "运行环境", *runtime_metric)
         self._metric(metrics, 1, "模型组", f"{ready_models}/{len(model_keys)}", "按工作流自动检查", "success" if ready_models == len(model_keys) else "warn")
         self._metric(metrics, 2, "缺少文件", f"{missing_count} 个", "只下载实际需要的内容", "warn" if missing_count else "success")
+
+        self._build_workflow_models(body)
 
         self._section_heading(body, "运行环境维护", "安装一次，之后由客户端自动启动")
         runtime_card = self._card(body, 78)
@@ -680,85 +685,6 @@ class StaticDashboardPages:
             self._action(runtime_actions, "本地安装包", self.app._select_runtime, "plain", 94).pack(side="left", padx=(8, 0))
             self._action(runtime_actions, "更多方式", self.app._show_runtime_maintenance, "plain", 82).pack(side="left", padx=(8, 0))
 
-        self._section_heading(
-            body,
-            "模型维护",
-            "模型与环境分开管理，缺什么就补什么",
-            actions=[
-                ("导入已有模型", self.app._import_models, "plain"),
-                ("重新检查", lambda: self.app._start_background_model_recheck(), "primary"),
-            ],
-        )
-        models_card = self._card(body, max(220, 22 + len(model_keys) * 36))
-        models_card.pack(fill="x", pady=(0, 14))
-        labels = {
-            "Qwen3.5": ("Qwen 3.5 文字生成", "文本模型", "primary"),
-            "Flux2": ("FLUX.2 Klein 9B", "文生图", "success"),
-            "Flux2 Klein 4B": ("FLUX.2 Klein 4B", "文/图生图", "primary"),
-            "Z-Image": ("Z-Image Turbo", "文生图", "success"),
-            "Wan2.1": ("WAN2.1 VACE 1.3B", "首尾帧", "warn"),
-            "Wan2.1 FLF2V 14B": ("WAN2.1 14B（原工作流）", "首尾帧", "warn"),
-            "LTX-2.3": ("LTX-2.3 22B", "首尾帧", "warn"),
-            "Wan2.1 Fun 1.3B": ("WAN2.1-Fun 1.3B", "首尾帧", "warn"),
-        }
-        for index, key in enumerate(model_keys):
-            title, kind, tone = labels.get(
-                key,
-                (
-                    str(MODEL_REQUIREMENTS.get(key, {}).get("title") or key),
-                    "模型",
-                    "primary",
-                ),
-            )
-            missing = list((model_status.get("missing") or {}).get(key) or [])
-            ready = model_status.get(key) == "完整"
-            row = tk.Frame(models_card, bg=self.c["card"])
-            row.pack(fill="x", padx=14, pady=(5 if index == 0 else 3, 3))
-            self._badge(row, kind, tone).pack(side="left")
-            tk.Label(row, text=title, font=self.f["bold"], fg=self.c["text"], bg=self.c["card"]).pack(side="left", fill="x", expand=True, padx=(11, 0))
-            self._badge(row, "完整" if ready else f"缺少 {len(missing)} 个", "success" if ready else "warn").pack(side="left", padx=(6, 10))
-            if not ready:
-                self._action(row, "下载模型", lambda item=key: self.app._show_model_install_help(item), "primary", 88).pack(side="right")
-            if index < len(model_keys) - 1:
-                tk.Frame(models_card, bg=self.c["border2"], height=1).pack(fill="x", padx=14)
-
-        storage = self._card(body, 74)
-        storage.pack(fill="x")
-        paths = [
-            ("模型", BASE_DIR / "models", self.app._open_models),
-            ("工作流", BASE_DIR / "workflows", self.app._open_workflows_dir),
-            ("生成结果", BASE_DIR / "outputs", self.app._open_outputs),
-        ]
-        for index, (label, path, command) in enumerate(paths):
-            cell = tk.Frame(storage, bg=self.c["card"])
-            cell.pack(side="left", fill="both", expand=True, padx=(16 if index == 0 else 8, 8), pady=8)
-            cell_head = tk.Frame(cell, bg=self.c["card"])
-            cell_head.pack(fill="x")
-            tk.Label(cell_head, text=f"{label}位置", font=self.f["bold"], fg=self.c["text"], bg=self.c["card"]).pack(side="left")
-            self._action(cell_head, "打开", command, "plain", 66).pack(side="right")
-            tk.Label(cell, text=self._short_path(path, 30), font=self.f["tiny"], fg=self.c["muted"], bg=self.c["card"]).pack(anchor="w", pady=(3, 0))
-
-        self._bind_mousewheel_tree(body, body._scroll_canvas)
-
-    # ── settings ───────────────────────────────────────────
-    def _build_settings(self, page):
-        body = self._scrollable_body(page)
-        self._section_heading(body, "连接与安全", "管理其他软件连接本客户端时使用的密钥")
-        access = self._card(body, 94)
-        access.pack(fill="x", pady=(0, 14))
-        access_left = tk.Frame(access, bg=self.c["card"])
-        access_left.pack(side="left", fill="both", expand=True, padx=16, pady=13)
-        tk.Label(access_left, text="访问密钥", font=self.f["h2"], fg=self.c["text"], bg=self.c["card"]).pack(anchor="w")
-        key = str(getattr(self.app, "_api_key", "") or "")
-        masked = f"{key[:12]}{'•' * 12}{key[-6:]}" if len(key) > 20 else "服务启动后自动生成"
-        self.app._settings_key_label = tk.Label(access_left, text=masked, font=self.f["mono"], fg=self.c["primary"], bg=self.c["card"])
-        self.app._settings_key_label.pack(anchor="w", pady=(5, 0))
-        tk.Label(access_left, text="密钥只保存在本机；请不要发送给不信任的人。", font=self.f["tiny"], fg=self.c["muted"], bg=self.c["card"]).pack(anchor="w", pady=(3, 0))
-        access_actions = tk.Frame(access, bg=self.c["card"])
-        access_actions.pack(side="right", padx=16)
-        self._action(access_actions, "修改密钥", self.app._edit_api_key, "plain", 84).pack(side="left", padx=(0, 8))
-        self._action(access_actions, "复制密钥", self.app._copy_api_key, "primary", 84).pack(side="left")
-
         self._section_heading(body, "组件更新", "修复运行环境或更新内置 ComfyUI")
         maintenance = self._card(body, 94)
         maintenance.pack(fill="x", pady=(0, 14))
@@ -795,21 +721,119 @@ class StaticDashboardPages:
             132,
         ).pack(side="left")
 
+        storage = self._card(body, 74)
+        storage.pack(fill="x")
+        paths = [
+            (
+                "models",
+                "模型",
+                self.app._storage_directory("models"),
+                self.app._open_models,
+            ),
+            (
+                "workflows",
+                "工作流",
+                self.app._storage_directory("workflows"),
+                self.app._open_workflows_dir,
+            ),
+            (
+                "outputs",
+                "生成结果",
+                self.app._storage_directory("outputs"),
+                self.app._open_outputs,
+            ),
+        ]
+        for index, (name, label, path, command) in enumerate(paths):
+            cell = tk.Frame(storage, bg=self.c["card"])
+            cell.pack(side="left", fill="both", expand=True, padx=(16 if index == 0 else 8, 8), pady=8)
+            cell_head = tk.Frame(cell, bg=self.c["card"])
+            cell_head.pack(fill="x")
+            tk.Label(cell_head, text=f"{label}位置", font=self.f["bold"], fg=self.c["text"], bg=self.c["card"]).pack(side="left")
+            self._action(cell_head, "打开", command, "plain", 66).pack(side="right")
+            self._action(cell_head, "修改", lambda key=name: self.app._choose_storage_directory(key), "plain", 54).pack(side="right", padx=(0, 4))
+            path_label = tk.Label(
+                cell,
+                text=self._short_path(path, 30),
+                font=self.f["tiny"],
+                fg=self.c["muted"],
+                bg=self.c["card"],
+            )
+            path_label.pack(anchor="w", pady=(3, 0))
+            self._track_storage_path_label(name, path_label, 30)
+
+        self._bind_mousewheel_tree(body, body._scroll_canvas)
+
+    # ── settings ───────────────────────────────────────────
+    def _build_settings(self, page):
+        body = self._scrollable_body(page)
+        self._section_heading(body, "连接与安全", "管理其他软件连接本客户端时使用的密钥")
+        access = self._card(body, 94)
+        access.pack(fill="x", pady=(0, 14))
+        access_left = tk.Frame(access, bg=self.c["card"])
+        access_left.pack(side="left", fill="both", expand=True, padx=16, pady=13)
+        tk.Label(access_left, text="访问密钥", font=self.f["h2"], fg=self.c["text"], bg=self.c["card"]).pack(anchor="w")
+        key = str(getattr(self.app, "_api_key", "") or "")
+        masked = f"{key[:12]}{'•' * 12}{key[-6:]}" if len(key) > 20 else "服务启动后自动生成"
+        self.app._settings_key_label = tk.Label(access_left, text=masked, font=self.f["mono"], fg=self.c["primary"], bg=self.c["card"])
+        self.app._settings_key_label.pack(anchor="w", pady=(5, 0))
+        tk.Label(access_left, text="密钥只保存在本机；请不要发送给不信任的人。", font=self.f["tiny"], fg=self.c["muted"], bg=self.c["card"]).pack(anchor="w", pady=(3, 0))
+        access_actions = tk.Frame(access, bg=self.c["card"])
+        access_actions.pack(side="right", padx=16)
+        self._action(access_actions, "修改密钥", self.app._edit_api_key, "plain", 84).pack(side="left", padx=(0, 8))
+
         self._section_heading(body, "文件位置", "快速打开模型、工作流、生成结果和日志")
         paths_card = self._card(body, 188)
         paths_card.pack(fill="x", pady=(0, 14))
         path_rows = [
-            ("模型", BASE_DIR / "models", self.app._open_models),
-            ("工作流", BASE_DIR / "workflows", self.app._open_workflows_dir),
-            ("生成结果", BASE_DIR / "outputs", self.app._open_outputs),
-            ("运行日志", BASE_DIR / "runtime" / "logs", self.app._open_logs_dir),
+            (
+                "models",
+                "模型",
+                self.app._storage_directory("models"),
+                self.app._open_models,
+            ),
+            (
+                "workflows",
+                "工作流",
+                self.app._storage_directory("workflows"),
+                self.app._open_workflows_dir,
+            ),
+            (
+                "outputs",
+                "生成结果",
+                self.app._storage_directory("outputs"),
+                self.app._open_outputs,
+            ),
+            (
+                "logs",
+                "运行日志",
+                self.app._storage_directory("logs"),
+                self.app._open_logs_dir,
+            ),
         ]
-        for index, (label, path, command) in enumerate(path_rows):
+        for index, (name, label, path, command) in enumerate(path_rows):
             row = tk.Frame(paths_card, bg=self.c["card"])
             row.pack(fill="x", padx=16, pady=(9 if index == 0 else 5, 5))
             tk.Label(row, text=label, width=10, anchor="w", font=self.f["bold"], fg=self.c["text"], bg=self.c["card"]).pack(side="left")
-            tk.Label(row, text=self._short_path(path, 68), anchor="w", font=self.f["mono"], fg=self.c["text2"], bg=self.c["card"]).pack(side="left", fill="x", expand=True)
-            self._action(row, "打开", command, "plain", 66).pack(side="right")
+            path_label = tk.Label(
+                row,
+                text=self._short_path(path, 56),
+                anchor="w",
+                font=self.f["mono"],
+                fg=self.c["text2"],
+                bg=self.c["card"],
+            )
+            path_label.pack(side="left", fill="x", expand=True)
+            self._track_storage_path_label(name, path_label, 56)
+            actions = tk.Frame(row, bg=self.c["card"])
+            actions.pack(side="right")
+            self._action(
+                actions,
+                "设置",
+                lambda item=name: self.app._choose_storage_directory(item),
+                "plain",
+                66,
+            ).pack(side="left", padx=(0, 8))
+            self._action(actions, "打开", command, "plain", 66).pack(side="left")
             if index < len(path_rows) - 1:
                 tk.Frame(paths_card, bg=self.c["border2"], height=1).pack(fill="x", padx=16)
 

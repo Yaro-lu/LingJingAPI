@@ -13,6 +13,13 @@ from typing import Any, Dict, Optional
 
 CONFIG_FILENAME = "config.local.txt"
 LEGACY_CONFIG_FILENAME = "config.local.json"
+DIRECTORY_NAMES = ("models", "workflows", "outputs", "logs")
+DEFAULT_DIRECTORY_PARTS = {
+    "models": ("models",),
+    "workflows": ("workflows",),
+    "outputs": ("outputs",),
+    "logs": ("runtime", "logs"),
+}
 
 
 class Config:
@@ -26,8 +33,16 @@ class Config:
             not self.config_path.is_file() and self.legacy_config_path.is_file()
         )
         self._config = self._load_config()
-        if should_migrate_legacy:
-            self.save()
+        invalid_directories = self._clear_invalid_directory_mappings()
+        if should_migrate_legacy or (
+            invalid_directories and self.config_path.is_file()
+        ):
+            try:
+                self.save()
+            except OSError:
+                # The resolved paths still fall back safely for this process
+                # even if an externally protected config cannot be rewritten.
+                pass
 
     def _load_config(self) -> Dict[str, Any]:
         defaults = self._default_config()
@@ -136,6 +151,12 @@ class Config:
             },
             "queue": {"max_concurrent": 1, "max_pending": 10},
             "runtime": {"download_url": ""},
+            "directories": {
+                "models": "",
+                "workflows": "",
+                "outputs": "",
+                "logs": "",
+            },
             "storage": {
                 "keep_requests": True,
                 "keep_inputs": True,
@@ -205,6 +226,8 @@ class Config:
             with temporary.open("w", encoding="utf-8", newline="\n") as handle:
                 handle.write("# 灵境造片厂高级设置\n")
                 handle.write("# 修改端口、显存模式等参数后，请退出并重新打开客户端。\n\n")
+                handle.write("# directories 中可填写现有的绝对目录；留空使用安装目录下的默认位置。\n")
+                handle.write("# 如果映射目录不存在，客户端会自动清除该项并恢复默认位置。\n\n")
                 parser.write(handle, space_around_delimiters=True)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -239,6 +262,75 @@ class Config:
             target = target[item]
         target[keys[-1]] = value
 
+    def _default_directory(self, name: str) -> Path:
+        if name not in DEFAULT_DIRECTORY_PARTS:
+            raise KeyError(f"Unknown directory mapping: {name}")
+        return self.base_dir.joinpath(*DEFAULT_DIRECTORY_PARTS[name])
+
+    @staticmethod
+    def _existing_absolute_directory(value: Any) -> Optional[Path]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                return None
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return resolved if resolved.is_dir() else None
+
+    def _clear_invalid_directory_mappings(self) -> list[str]:
+        invalid = []
+        for name in DIRECTORY_NAMES:
+            raw = self.get(f"directories.{name}", "")
+            if str(raw or "").strip() and self._existing_absolute_directory(raw) is None:
+                self.set(f"directories.{name}", "")
+                invalid.append(name)
+        return invalid
+
+    def directory(self, name: str) -> Path:
+        if name not in DEFAULT_DIRECTORY_PARTS:
+            raise KeyError(f"Unknown directory mapping: {name}")
+        mapped = self._existing_absolute_directory(
+            self.get(f"directories.{name}", "")
+        )
+        if mapped is not None:
+            return mapped
+        default = self._default_directory(name)
+        default.mkdir(parents=True, exist_ok=True)
+        return default.resolve()
+
+    def set_directory_mapping(self, name: str, path: Path | str) -> Path:
+        if name not in DEFAULT_DIRECTORY_PARTS:
+            raise KeyError(f"Unknown directory mapping: {name}")
+        resolved = self._existing_absolute_directory(path)
+        if resolved is None:
+            raise ValueError("目录不存在或不是可用的绝对路径")
+        # Accept either the storage folder itself or a matching application root.
+        # Only adapt the requested kind; never change sibling mappings implicitly.
+        if resolved.name.casefold() != name.casefold():
+            for parts in ((name,), ("ComfyUI", name)):
+                candidate = resolved.joinpath(*parts)
+                if candidate.is_dir():
+                    resolved = candidate.resolve(strict=True)
+                    break
+        default = self._default_directory(name).resolve(strict=False)
+        self.set(
+            f"directories.{name}",
+            "" if resolved == default else str(resolved),
+        )
+        self.save()
+        return resolved
+
+    def reset_directory_mapping(self, name: str) -> Path:
+        if name not in DEFAULT_DIRECTORY_PARTS:
+            raise KeyError(f"Unknown directory mapping: {name}")
+        self.set(f"directories.{name}", "")
+        self.save()
+        return self.directory(name)
+
     @property
     def server_host(self) -> str:
         return str(self.get("server.host", "127.0.0.1"))
@@ -270,6 +362,14 @@ class Config:
         return path
 
     @property
+    def models_dir(self) -> Path:
+        return self.directory("models")
+
+    @property
+    def workflows_dir(self) -> Path:
+        return self.directory("workflows")
+
+    @property
     def requests_dir(self) -> Path:
         path = self.runtime_dir / "requests"
         path.mkdir(parents=True, exist_ok=True)
@@ -283,9 +383,7 @@ class Config:
 
     @property
     def outputs_dir(self) -> Path:
-        path = self.runtime_dir / "outputs"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return self.directory("outputs")
 
     @property
     def tasks_dir(self) -> Path:
@@ -295,9 +393,7 @@ class Config:
 
     @property
     def logs_dir(self) -> Path:
-        path = self.runtime_dir / "logs"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return self.directory("logs")
 
     @property
     def temp_dir(self) -> Path:

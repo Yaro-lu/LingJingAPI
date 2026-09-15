@@ -27,12 +27,14 @@ from typing import List, Optional
 
 from app.core.workflow_dependencies import normalize_workflow_dependencies
 from app.core.workflow_import import ensure_safe_workflows_root
+from app.core.workflow_adaptation import MAPPING_KEYS, make_mapping
 
 
 # manifest["type"] → output_type
 _TYPE_MAP = {
     "video.first_last_to_video": "video",
     "video.image_to_video": "video",
+    "video.custom": "video",
     "image.text_to_image": "image",
     "image.text_image_to_image": "image",
     "image.image_to_image": "image",
@@ -99,6 +101,7 @@ class WorkflowDef:
         capability: str = "",
         model_group: str = "",
         workflow_variants: Optional[dict] = None,
+        api_mapping: Optional[dict] = None,
     ):
         self.id = str(id or "").strip()
         self.name = str(name or self.id).strip()
@@ -114,6 +117,7 @@ class WorkflowDef:
         self.capability = str(capability or "").strip()
         self.model_group = str(model_group or "").strip()
         self.workflow_variants = _safe_workflow_variants(workflow_variants)
+        self.api_mapping = {k: v for k, v in (api_mapping or {}).items() if k in MAPPING_KEYS}
         self._workflows_dir: Optional[Path] = None  # 由 Registry 注入
 
     @property
@@ -144,6 +148,7 @@ class WorkflowDef:
             "capability": self.capability,
             "model_group": self.model_group,
             "workflow_variants": self.workflow_variants,
+            **self.api_mapping,
         }
 
     @classmethod
@@ -165,6 +170,7 @@ class WorkflowDef:
             capability=d.get("capability") or "",
             model_group=d.get("model_group") or d.get("modelGroup") or "",
             workflow_variants=d.get("workflow_variants") or d.get("workflowVariants") or {},
+            api_mapping={k: d[k] for k in MAPPING_KEYS if k in d},
         )
 
     @classmethod
@@ -222,6 +228,7 @@ class WorkflowDef:
             capability=manifest.get("capability") or "",
             model_group=manifest.get("model_group") or manifest.get("modelGroup") or "",
             workflow_variants=manifest.get("workflow_variants") or manifest.get("workflowVariants") or {},
+            api_mapping={k: manifest[k] for k in MAPPING_KEYS if k in manifest},
         )
 
 
@@ -672,6 +679,50 @@ class WorkflowRegistry:
                     self._save_unlocked()
                     return True
         return False
+
+    def save_mapping(self, wf_id: str, fields: list, output_type: str, expected_hash: str) -> dict:
+        """Commit a manual mapping alongside its source manifest, or roll back."""
+        from app.core.workflow_adaptation import graph_hash
+
+        with self.locked_mutation():
+            wf = self.get(wf_id)
+            folder = wf.folder if wf else None
+            if folder is None:
+                raise ValueError("工作流不存在，请刷新列表")
+            ensure_safe_workflows_root(self.workflows_dir)
+            graph_path, manifest_path = folder / "workflow.json", folder / "manifest.json"
+            if any(p.is_symlink() or _is_reparse_point(p) for p in (folder, graph_path, manifest_path)):
+                raise ValueError("工作流路径不安全")
+            graph = json.loads(graph_path.read_text(encoding="utf-8"))
+            if graph_hash(graph) != expected_hash:
+                raise ValueError("编辑期间工作流已改变，请重新打开参数设置")
+            mapping = make_mapping(graph, fields, output_type)
+            previous = manifest_path.read_bytes()
+            manifest = json.loads(previous)
+            manifest.update(mapping)
+            manifest["type"] = {"image": "image.text_to_image", "video": "video.custom", "text": "text.chat"}[output_type]
+            handle, name = tempfile.mkstemp(prefix=".mapping-", suffix=".json", dir=folder)
+            temporary = Path(name)
+            try:
+                with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                    json.dump(manifest, stream, ensure_ascii=False, indent=2)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, manifest_path)
+                wf.api_mapping = {k: mapping[k] for k in MAPPING_KEYS}
+                wf.input_schema = mapping["input_schema"]
+                wf.output_type = output_type
+                wf.workflow_type = manifest["type"]
+                wf.inputs = mapping["input_schema"]["inputs"]
+                self._save_unlocked()
+            except Exception:
+                temporary.write_bytes(previous)
+                os.replace(temporary, manifest_path)
+                self._load_unlocked()
+                raise
+            finally:
+                temporary.unlink(missing_ok=True)
+            return wf.to_dict()
 
     def move_down(self, wf_id: str) -> bool:
         with self._thread_lock, self._lock, self._locked_config():

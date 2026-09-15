@@ -303,7 +303,7 @@ def build_story(s):
     story.append(Paragraph("1. 双击轻量安装包，按提示完成安装。安装过程不需要管理员权限，也不会安装模型。", s["step"]))
     story.append(Paragraph("2. 安装完成后，桌面会出现两个使用同一 Logo 的入口：“灵境造片厂”用于启动客户端，“灵境造片厂示例页”用于第一次体验接口。", s["step"]))
     story.append(Paragraph("3. 客户端界面可以立即打开；此时文字、图片和视频生成仍不可用，因为大型 AI 运行环境独立分发。", s["step"]))
-    story.append(Paragraph("4. 进入“模型与环境”，点击“一键修复”。客户端会自动拉取环境包，并使用内置 SHA256 校验，通过后直接安装。", s["step"]))
+    story.append(Paragraph("4. 进入“模型与环境”，安装或修复运行环境。客户端会自动拉取环境包，并使用内置 SHA256 校验，通过后直接安装。", s["step"]))
     story.append(Paragraph("5. 只有自动拉取失败时，客户端才会显示“自动修复失败”弹窗。可复制 GitHub 地址，手动下载环境包，再选择本地环境包完成安装。", s["step"]))
     story.append(Spacer(1, 3 * mm))
     story.append(note_box(f"运行环境包文件名：<b>{RUNTIME_PACKAGE_NAME}</b><br/>项目主页：<b>{PROJECT_URL}</b>", s["body"], SOFT_WARN))
@@ -330,33 +330,52 @@ def build_story(s):
     story.append(Paragraph("运行环境包含便携 Python、ComfyUI、Torch/CUDA 和 Cloudflared。客户端会先校验环境包名称、精确大小、SHA256 和目录结构，再事务替换环境目录。模型、工作流和生成结果不会因为环境修复而删除。", s["body"]))
     story.append(Paragraph("官方环境包版本、文件名、下载地址、大小和 SHA256 固定在客户端发布清单中。需要使用授权镜像时，可以在 runtime/config.local.txt 的 [runtime] 区域修改 HTTPS download_url；镜像不能改变客户端内置的文件名、大小和 SHA256 校验。", s["body"]))
     story.append(Paragraph("模型", s["h2"]))
-    story.append(Paragraph("模型统一放在安装根目录的 `models` 文件夹。优先使用可信来源的 safetensors 或 GGUF 文件，不要导入来源不明的传统 PyTorch checkpoint。", s["body"]))
+    story.append(Paragraph("模型默认放在安装根目录的 models 文件夹，也可在“模型文件”中映射已有模型。修改目录后会扫描并适配相同的目录结构。优先使用可信来源的 safetensors 或 GGUF 文件，不要导入来源不明的传统 PyTorch checkpoint。", s["body"]))
     story.append(Paragraph("工作流", s["h2"]))
-    story.append(Paragraph("每个工作流至少包含 manifest.json 和 workflow.json。manifest.json 定义公开调用名称、输入参数、输出类型和模型依赖。导入后应在“工作流”页面确认状态为“可以使用”。", s["body"]))
+    story.append(Paragraph("每个工作流至少包含 manifest.json 和 workflow.json。manifest.json 定义公开调用名称、输入参数、输出类型和模型依赖。导入后应在“模型与环境”的工作流列表确认状态为“可以使用”。", s["body"]))
     story.append(Paragraph("推荐操作顺序", s["h2"]))
     for index, text in enumerate(
         [
             "安装或修复运行环境，并执行“检查环境”。",
             "导入工作流所需模型，然后点击“重新检查”。",
-            "在工作流页面选择默认工作流。",
-            "回到控制台启动后台服务；同机调用复制“本地 API”，远程调用复制“公网 URL”，两者使用同一个 API Key。",
-            "打开桌面或安装目录中的“灵境造片厂示例页”，填写 URL 和 Key，连接后选择已检测到的文字、图片或视频模型。",
+            "在“模型与环境”的工作流列表选择默认工作流。",
+            "回到控制台启动后台服务，复制 URL 和 API Key。",
+            "在浏览器直接打开控制台的本地、局域网或公网 URL，填写 Key，连接后选择可用工作流。原有独立 HTML 页面也可以继续使用。",
         ],
         1,
     ):
         story.append(Paragraph(f"{index}. {text}", s["step"]))
     story.append(note_box("客户端更新只替换程序文件；运行环境、模型、配置、日志和生成结果独立保存。卸载会清理程序、后装运行环境、模型和工作流，但保留 outputs 中的生成资产；重要内容仍请自行备份。", s["body"]))
 
+    for title, filename, caption in [
+        ("图解 1 · 工作流、模型与环境", "workflow-models.png", "演示界面，状态数值为演示数据。工作流按钮集中在右侧，缺失模型可下载或映射已有文件。"),
+        ("图解 2 · 连接客户端", "console.png", "演示界面，公网地址与 Key 已替换为占位信息。本机、同 Wi-Fi 和公网分别使用对应的 URL。"),
+        ("图解 3 · 网页创作", "studio.png", "实际创作页面：左侧管理项目，中间查看作品，右侧选择工作流与生成参数。图片点击加载原图，视频先加载首帧预览。"),
+    ]:
+        screenshot = ROOT / "docs" / "images" / "2.0" / filename
+        if screenshot.is_file():
+            story.extend([PageBreak(), Paragraph(title, s["h1"])])
+            picture = Image(str(screenshot))
+            picture.drawHeight *= 166 * mm / picture.drawWidth
+            picture.drawWidth = 166 * mm
+            story.append(picture)
+            story.append(Spacer(1, 5 * mm))
+            story.append(Paragraph(caption, s["body"]))
+            if filename == "studio.png":
+                story.append(Paragraph("尝试：使用 FLUX.2 Klein 4B 输入“一只猫坐在杯子里”，生成后将图片加入参考图，再输入“把杯子换成红色”。这是操作示例，每次生成画面可能不同。", s["body"]))
+                story.append(Paragraph("项目分类和历史保存在浏览器，切换 URL 或 Key 不会主动清空记录。删除项目仅移除分类；作品菜单中的“删除文件”会删除对应本地文件。当前按单用户使用，不做 Key 之间的作品隔离。", s["body"]))
+
     story.extend([PageBreak(), Paragraph("3. API 接入基础", s["h1"])])
     story.append(Paragraph("新手示例页", s["h2"]))
-    story.append(Paragraph("“灵境造片厂示例页.html”完全保存在本机，是一个不依赖额外服务的纯前端页面。它只会把你填写的 URL、API Key 和生成参数发送给已经启动的灵境造片厂客户端；连接后会读取客户端模型列表，并按文字、图片、视频自动分类。", s["body"]))
-    story.append(note_box("推荐第一次使用先打开示例页：输入客户端控制台显示的 URL 与 API Key，点击“连接并检测模型”，在“图片”分类输入画面描述后开始生成；视频分类需要选择首帧和尾帧图片。API Key 仅保存在当前浏览器会话中，关闭浏览器后需要重新填写。", s["body"]))
+    story.append(Paragraph("“灵境造片厂示例页.html”完全保存在本机，是一个不依赖额外服务的纯前端页面。可直接通过客户端 URL 打开，也可使用独立 HTML 文件。连接后只显示当前可用的工作流，选择后按该工作流加载参数。", s["body"]))
+    story.append(note_box("在网页右上角填写 URL 和 API Key 后连接，右侧选择工作流并输入提示词。视频输入按工作流要求选择首帧、尾帧或参考图。连接信息会保存在当前浏览器，刷新时尝试自动连接一次，请在自己的设备上使用。", s["body"]))
     story.append(Paragraph("地址与鉴权", s["h2"]))
-    story.append(Paragraph("控制台会同时显示“本地 API”和“公网 URL”，两者使用同一个 API_KEY。同一台电脑上的程序优先使用本地 API，避免依赖公网隧道；其他设备或远程程序使用公网 URL。除 `/healthz` 外，业务接口通常需要在请求头中携带 Bearer Token。本机地址可使用 HTTP；远程或公网地址必须使用 HTTPS，示例页会拒绝向远程明文 HTTP 地址发送 Key。", s["body"]))
+    story.append(Paragraph("控制台会显示公网、本地及局域网 BASE_URL，以及生成接口使用的 API_KEY。除 `/healthz` 外，业务接口通常需要在请求头中携带 Bearer Token。本机和支持的私有局域网地址可使用 HTTP，公网地址必须使用 HTTPS。手机建议在浏览器直接打开局域网 URL，并确保同一网络和 Windows 防火墙允许访问。", s["body"]))
     story.append(code_box('Authorization: Bearer API_KEY\nContent-Type: application/json', s["code"]))
     story.append(Spacer(1, 4 * mm))
     story.append(Paragraph("主要接口", s["h2"]))
     story.append(endpoint_table(s))
+    story.append(Paragraph("创作页右侧的“接口文档”提供当前工作流的参数和调用示例。第三方先读取 GET /v1/workflows/{workflow_id}/schema，再按该 schema 提交参数。", s["body"]))
     story.append(Spacer(1, 4 * mm))
     story.append(note_box("不要把 API Key 写入公开网页、代码仓库、聊天截图或日志。公网 URL 是互联网入口，应和 API Key 一起妥善保存。", s["body"], SOFT_WARN))
 
@@ -385,7 +404,7 @@ def build_story(s):
         ("一键修复拉取失败怎么办", "失败弹窗会显示网络或下载错误，并提供可复制的 GitHub 地址。在项目 Releases 下载 7z 环境包，然后回到客户端选择本地环境包；客户端会使用内置 SHA256 校验。"),
         ("环境检查提示 NVIDIA 驱动过旧", "CUDA 13 运行环境要求使用 R580 或更高驱动。更新驱动后重启电脑，再点击“检查环境”。"),
         ("接口返回 401 或 403", "检查 Authorization 请求头是否使用 `Bearer API_KEY`，并确认复制的是生成接口 Key，而不是本机管理 Key。"),
-        ("接口能访问但工作流失败", "在工作流页面查看缺失模型和公开参数；确认模型文件完整，默认工作流已选中，ComfyUI 状态正常。"),
+        ("接口能访问但工作流失败", "在“模型与环境”的工作流列表查看缺失模型和公开参数；确认模型文件完整，默认工作流已选中，ComfyUI 状态正常。"),
         ("登录平台会同步什么", "登录后会向你填写的服务端同步公网 URL、本机 API Key、设备名称、工作流/模型状态和不含提示词的任务进度，供平台调用。提示词与生成结果不在同步数据中；只应登录可信服务。不登录不影响完整本地功能。"),
         ("更新客户端会不会删除模型", "不会。程序、运行环境、模型和用户数据分离。重要模型和输出仍建议定期备份。"),
     ]

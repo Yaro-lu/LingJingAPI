@@ -79,6 +79,8 @@ from app.core.comfyui_update import (  # noqa: E402
     ComfyUIUpdateError,
     prepare_comfyui_update,
 )
+from app.core.comfyui_git_update import update_git_comfyui
+from app.core.comfyui_conversion import install_frontend_bridge, convert_with_comfyui
 from app.core.comfyui_update_worker import (  # noqa: E402
     consume_update_result as consume_comfyui_update_result,
     launch_worker as launch_comfyui_update_worker,
@@ -86,6 +88,11 @@ from app.core.comfyui_update_worker import (  # noqa: E402
 )
 from app.core.process_supervisor import ProcessSupervisor  # noqa: E402
 from app.engines.comfyui_client import ComfyUIClient  # noqa: E402
+import urllib.request as ur
+from app.core.workflow_adaptation import (  # noqa: E402
+    analyze_workflow, candidates, convert_editor_workflow, graph_hash,
+    infer_output_type, make_mapping, mapping_fields, validate_graph,
+)
 from app.core.model_maintenance import (  # noqa: E402
     MODEL_REQUIREMENTS,
     check_model_groups,
@@ -335,7 +342,7 @@ LAYOUT = {
     "gap": 10,
     "top_h": 78,
     "status_h": 38,
-    "info_h": 120,
+    "info_h": 184,  # Three 56px URL cards with two 8px gaps.
     "info_row_h": 56,
     "info_gap": 8,
     "left_w": 240,
@@ -360,6 +367,32 @@ _RUNTIME_UPDATE_OPERATION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 # ══════════════════════════════════════════════════════
 # 工具函数
 # ══════════════════════════════════════════════════════
+
+def _active_local_config() -> Config:
+    """Use the startup snapshot while allowing tests to replace ``BASE_DIR``."""
+    try:
+        if _LOCAL_CONFIG.base_dir.resolve(strict=False) == BASE_DIR.resolve(strict=False):
+            return _LOCAL_CONFIG
+    except (OSError, RuntimeError):
+        pass
+    return Config(BASE_DIR)
+
+
+def _models_dir() -> Path:
+    return _active_local_config().models_dir
+
+
+def _workflows_dir() -> Path:
+    return _active_local_config().workflows_dir
+
+
+def _outputs_dir() -> Path:
+    return _active_local_config().outputs_dir
+
+
+def _logs_dir() -> Path:
+    return _active_local_config().logs_dir
+
 
 def _load_local_config():
     try:
@@ -528,7 +561,7 @@ def _model_file_ready(path: Path, expected_size: int | None = None) -> bool:
 
 def _check_models_status() -> dict:
     """Check every model group used by the bundled workflows."""
-    return check_model_groups(BASE_DIR / "models", MODEL_REQUIREMENTS)
+    return check_model_groups(_models_dir(), MODEL_REQUIREMENTS)
 
 
 def _model_download_active(control: dict) -> bool:
@@ -696,11 +729,12 @@ def _check_system_env(run_command=subprocess.run) -> dict:
 
 
 def _ensure_extra_model_paths():
-    """确保 ComfyUI 的 extra_model_paths.yaml 使用相对路径指向 models/"""
+    """确保 ComfyUI 的模型路径配置指向当前有效的模型目录。"""
     yaml_path = BASE_DIR / "runtime" / "ComfyUI" / "extra_model_paths.yaml"
-    content = """# 灵境造片厂 — 自动生成的模型路径配置
+    models_path = json.dumps(_models_dir().resolve().as_posix(), ensure_ascii=False)
+    content = f"""# 灵境造片厂 — 自动生成的模型路径配置
 comfyui:
-    base_path: ../../models/
+    base_path: {models_path}
     checkpoints: checkpoints/
     loras: loras/
     vae: vae/
@@ -712,6 +746,9 @@ comfyui:
          diffusion_models/
     clip_vision: clip_vision/
 """
+    from app.core.model_mappings import extra_search_paths
+    for index, (category, directory) in enumerate(extra_search_paths(_models_dir())):
+        content += f"\nlingjing_local_{index}:\n    {category}: {json.dumps(directory, ensure_ascii=False)}\n"
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(yaml_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -939,6 +976,7 @@ class GatewayApp(WindowBase):
         self._health_needs_full_refresh = True
         self._shutting_down = False
         self._last_health = {}
+        self._workflow_display_fingerprint_value = ""
         self._runtime_start_blocked = False
         self._capture_startup_update_results()
         self._server_session_token = ""
@@ -976,8 +1014,8 @@ class GatewayApp(WindowBase):
         self._tray_thread = None
 
         # 状态缓存
-        cleanup_incomplete_imports(BASE_DIR / "models")
-        cleanup_stale_workflow_imports(BASE_DIR / "workflows", BASE_DIR / "runtime")
+        cleanup_incomplete_imports(_models_dir())
+        cleanup_stale_workflow_imports(_workflows_dir(), BASE_DIR / "runtime")
         self._model_status = _check_models_status()
         self._environment_status = {}
         self._current_task_text = "无任务"
@@ -1568,7 +1606,6 @@ class GatewayApp(WindowBase):
 
         nav_specs = [
             ("overview", "▦", "控制台"),
-            ("workflows", "◇", "工作流"),
             ("resources", "▣", "模型与环境"),
             ("settings", "⚙", "设置"),
         ]
@@ -1737,10 +1774,12 @@ class GatewayApp(WindowBase):
 
     def _build_static_pages(self):
         self._dashboard_pages = StaticDashboardPages(self, C, F)
-        for page_id in ("workflows", "resources", "settings"):
+        for page_id in ("resources", "settings"):
             self._pages[page_id] = self._dashboard_pages.build(self._page_host, page_id)
 
     def _show_page(self, page_id: str):
+        if page_id == "workflows":
+            page_id = "resources"
         page = self._pages.get(page_id)
         if page is None:
             return
@@ -1755,8 +1794,7 @@ class GatewayApp(WindowBase):
 
         page_meta = {
             "overview": ("控制台", "服务状态、调用信息与当前任务"),
-            "workflows": ("工作流", "添加、检查和管理本机生成能力"),
-            "resources": ("模型与环境", "准备运行环境并补齐工作流所需模型"),
+            "resources": ("模型与环境", "管理工作流配置、模型与运行环境"),
             "settings": ("设置", "访问密钥、文件位置与软件基础配置"),
         }
         title, subtitle = page_meta[page_id]
@@ -1981,20 +2019,22 @@ class GatewayApp(WindowBase):
             command=self._copy_public_url,
         )
         self._public_url_card.pack(side="top", fill="x")
-        self._url_card_gap = tk.Frame(
-            self._url_stack,
-            bg=C["bg"],
-            height=LAYOUT["info_gap"],
-        )
-        self._url_card_gap.pack(side="top", fill="x")
         self._local_url_card, self._local_url_label = build_url_card(
-            title="本地 API",
+            title="本地 URL",
             icon="⌂",
             value=self._local_url,
             color=C["success"],
             command=self._copy_local_url,
         )
-        self._local_url_card.pack(side="top", fill="x")
+        self._local_url_card.pack(side="top", fill="x", pady=(8, 0))
+        from app.core.single_user_assets import lan_urls
+        addresses = lan_urls(urlsplit(API_BASE).port or 18188)
+        self._lan_url = addresses[0] if addresses else ""
+        self._lan_url_card, self._lan_url_label = build_url_card(
+            title="局域网 URL", icon="⌁", value=self._lan_url or "未检测到局域网，请用公网 URL",
+            color=C["success"], command=lambda: self._copy(self._lan_url) if self._lan_url else None,
+        )
+        self._lan_url_card.pack(side="top", fill="x", pady=(8, 0))
 
         # API Key
         self._api_key_card = self._card(self._info_frame)
@@ -2759,8 +2799,15 @@ class GatewayApp(WindowBase):
         canvas = getattr(self, "_workflow_canvas", None)
         if canvas is None:
             return None
-        delta = int(getattr(event, "delta", 0) or 0)
-        button = int(getattr(event, "num", 0) or 0)
+        # Tk uses "??" for event fields that do not apply on this platform.
+        try:
+            delta = int(getattr(event, "delta", 0) or 0)
+        except (TypeError, ValueError):
+            delta = 0
+        try:
+            button = int(getattr(event, "num", 0) or 0)
+        except (TypeError, ValueError):
+            button = 0
         if delta:
             units = max(1, abs(delta) // 120)
             direction = -1 if delta > 0 else 1
@@ -3018,7 +3065,7 @@ class GatewayApp(WindowBase):
     def _missing_model_items(self, model_key: str) -> list:
         spec = MODEL_REQUIREMENTS.get(model_key, {})
         items = []
-        models_dir = BASE_DIR / "models"
+        models_dir = _models_dir()
         for item in spec.get("items", []):
             rel_path = item.get("path", "")
             if rel_path and not _model_file_ready(models_dir / rel_path, item.get("size_bytes")):
@@ -3082,8 +3129,28 @@ class GatewayApp(WindowBase):
         ]
         return "\n".join(lines)
 
-    def _show_model_install_help(self, model_key: str):
-        missing = self._missing_model_items(model_key)
+    def _show_workflow_model_help(self, workflow: dict):
+        self._footer_label.config(text="  正在识别模型下载地址与存放位置...")
+
+        def worker():
+            try:
+                from app.core.workflow_model_sources import workflow_model_items
+                items = workflow_model_items(workflow, BASE_DIR)
+                if not items:
+                    key = self._workflow_model_key(workflow)
+                    items = list(MODEL_REQUIREMENTS.get(key, {}).get("items", []))
+                if not items:
+                    raise ValueError("工作流未声明可识别的模型文件，请在配置中补充模型依赖。")
+                self.after(0, lambda: self._show_model_install_help(
+                    self._workflow_model_key(workflow), items=items,
+                    title_override=str(workflow.get("name") or workflow.get("id"))))
+                self.after(0, lambda: self._footer_label.config(text="  模型位置已识别；可下载缺失文件或选择本地模型"))
+            except Exception as exc:
+                self.after(0, lambda message=str(exc): messagebox.showerror("模型识别失败", message))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_model_install_help(self, model_key: str, *, items=None, title_override=None):
+        missing = self._missing_model_items(model_key) if items is None else items
         popup_w = 840
         popup_h = 600 if len(missing) >= 4 else 520
         popup = tk.Toplevel(self)
@@ -3095,7 +3162,7 @@ class GatewayApp(WindowBase):
         self._center_popup(popup, popup_w, popup_h)
 
         panel = self._card(popup, fill="both", expand=True, padx=18, pady=18)
-        title = MODEL_REQUIREMENTS.get(model_key, {}).get("title", model_key)
+        title = title_override or MODEL_REQUIREMENTS.get(model_key, {}).get("title", model_key)
         tk.Label(panel, text=f"{title}：下载模型", font=F["title"], fg=C["text"], bg=C["card"]).pack(anchor="w", padx=18, pady=(16, 4))
         tk.Label(panel, text="选择需要的模型文件。客户端优先使用国内镜像，连接失败时会自动切换到官方源。",
                  font=F["normal"], fg=C["text2"], bg=C["card"]).pack(anchor="w", padx=18, pady=(0, 10))
@@ -3132,12 +3199,14 @@ class GatewayApp(WindowBase):
         canvas.bind("<Configure>", lambda event: canvas.itemconfig(canvas_window, width=event.width))
 
         download_controls = []
+        selection_session = {"scan_disabled": False, "controls": download_controls}
         if not missing:
             empty = self._card(rows)
             empty.pack(fill="x", pady=(0, 10))
             tk.Label(empty, text="模型文件已完整，无需下载。", font=F["body"], fg=C["success"], bg=C["card"]).pack(anchor="w", padx=16, pady=18)
         for index, item in enumerate(missing, 1):
             control = self._build_model_download_row(rows, model_key, item, index)
+            control["selection_session"] = selection_session
             download_controls.append(control)
 
         def close_popup():
@@ -3169,21 +3238,84 @@ class GatewayApp(WindowBase):
         self._button(actions, "关闭", close_popup, "plain").pack(side="right", ipadx=12, ipady=6)
         self._bind_model_download_mousewheel_tree(popup, canvas)
 
+    def _map_local_model(self, control: dict):
+        owner = self._model_download_owner(control)
+        if owner.get("state") in {"downloading", "resuming", "paused", "cancelling"}:
+            messagebox.showinfo("模型正在下载", "请先取消此文件的下载，再选择本地模型。")
+            return
+        item = control["item"]
+        selected = filedialog.askopenfilename(
+            title=f"选择 {Path(item['path']).name}",
+            filetypes=[("模型文件", "*.safetensors *.gguf *.ckpt *.pt *.pth *.bin"), ("所有文件", "*.*")],
+        )
+        if not selected:
+            return
+        try:
+            self._apply_local_model_mapping(control, selected)
+            additional = self._offer_related_model_mappings(control, selected)
+            _ensure_extra_model_paths()
+            self._start_background_model_recheck()
+            self._footer_label.config(text=f"  已映射 {1 + additional} 个本地模型；请重启后台生效，原文件未复制或移动")
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("映射失败", str(exc))
+
+    def _apply_local_model_mapping(self, control, selected):
+        from app.core.model_mappings import register_mapping
+        from app.core.workflow_dependencies import clear_model_index_cache
+        owner = self._model_download_owner(control)
+        if owner.get("state") in {"downloading", "resuming", "paused", "cancelling"}:
+            raise ValueError("文件正在下载，请先取消下载再关联本地模型")
+        item = control["item"]
+        register_mapping(_models_dir(), item["path"], selected, item.get("size_bytes"))
+        clear_model_index_cache()
+        owner.update(state="done", progress_percent=100.0, status_text="已映射本地模型；重启后台后生效")
+        for view in owner.get("views", [control]):
+            if view.get("path_label") is not None and self._model_download_view_exists(view):
+                view["path_label"].configure(text=self._short_middle(str(Path(selected).parent), 22, 18))
+        self._refresh_model_download_views(owner)
+
+    def _offer_related_model_mappings(self, control, selected):
+        session = control.get("selection_session")
+        if not session or session["scan_disabled"]:
+            return 0
+        from app.core.model_mappings import find_related_models
+        controls = {c["item"]["path"]: c for c in session["controls"]
+                    if self._model_download_owner(c).get("state") not in {"done", "downloading", "resuming", "paused", "cancelling"}}
+        matches = find_related_models(selected, [c["item"] for c in controls.values()], _models_dir())
+        if not matches:
+            return 0
+        details = "\n\n".join(f"{match['item']['path']}\n← {match['source']}" for match in matches)
+        use = messagebox.askyesno(
+            "发现其他本地模型",
+            f"在当前目录和上一级目录发现 {len(matches)} 个同名模型：\n\n{details}\n\n是否一起关联？不会复制或移动原文件。\n选择“否”后，本次工作流配置不再扫描或提示。",
+        )
+        if not use:
+            session["scan_disabled"] = True
+            return 0
+        applied = 0
+        for match in matches:
+            try:
+                self._apply_local_model_mapping(controls[match["item"]["path"]], match["source"])
+                applied += 1
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("部分模型未能关联", f"{match['item']['path']}：{exc}\n已成功关联的文件会保留。")
+        return applied
+
     def _build_model_download_row(self, parent, model_key: str, item: dict, index: int) -> dict:
         rel_path = str(item.get("path") or "").strip()
         sources = self._model_download_sources(item.get("url", ""))
         url = sources[0][1] if sources else ""
-        target = BASE_DIR / "models" / rel_path
+        target = _models_dir() / rel_path
         filename = Path(rel_path).name or f"model_{index}"
-        rel_parent = Path(rel_path).parent if rel_path else Path("")
-        display_path = str(Path("models") / rel_parent) if str(rel_parent) not in ("", ".") else "models"
+        from app.core.model_mappings import resolve_model_file
+        display_path = self._short_middle(str(resolve_model_file(target).parent), 22, 18)
 
         card = self._card(parent)
         card.pack(fill="x", pady=(0, 8))
         card.grid_columnconfigure(1, weight=3)
         card.grid_columnconfigure(2, weight=2)
 
-        tk.Label(card, text=f"{index}", font=F["bold"], fg=C["primary"], bg=C["card"], width=3).grid(row=0, column=0, rowspan=3, padx=(12, 6), pady=10, sticky="n")
+        tk.Label(card, text=f"{index}", font=F["bold"], fg=C["primary"], bg=C["card"], width=3).grid(row=0, column=0, rowspan=4, padx=(12, 6), pady=10, sticky="n")
         tk.Label(card, text="模型文件", font=F["small"], fg=C["text2"], bg=C["card"]).grid(row=0, column=1, sticky="w", pady=(9, 0))
         tk.Label(card, text=filename, font=F["bold"], fg=C["text"], bg=C["card"], anchor="w").grid(row=1, column=1, sticky="ew", pady=(1, 0))
 
@@ -3217,7 +3349,23 @@ class GatewayApp(WindowBase):
         progress = ttk.Progressbar(right, orient="horizontal", mode="determinate", maximum=100, variable=progress_var, style="Progress.Horizontal.TProgressbar")
         progress.pack(fill="x", pady=(8, 4))
         status_var = tk.StringVar(value="等待下载")
-        status = tk.Label(right, textvariable=status_var, font=F["small"], fg=C["text2"], bg=C["card"], anchor="w")
+        action_line = tk.Frame(card, bg=C["card"])
+        action_line.grid(
+            row=3,
+            column=1,
+            columnspan=2,
+            sticky="ew",
+            padx=(0, 12),
+            pady=(0, 9),
+        )
+        status = tk.Label(
+            action_line,
+            textvariable=status_var,
+            font=F["small"],
+            fg=C["text2"],
+            bg=C["card"],
+            anchor="w",
+        )
         status.pack(side="left", fill="x", expand=True)
 
         control = {
@@ -3226,6 +3374,7 @@ class GatewayApp(WindowBase):
             "url": url,
             "urls": [source_url for _source_name, source_url in sources],
             "target": target,
+            "path_label": path_label,
             "card": card,
             "progress_var": progress_var,
             "status_var": status_var,
@@ -3237,7 +3386,7 @@ class GatewayApp(WindowBase):
             "worker": None,
         }
         control["views"] = [control]
-        button_row = tk.Frame(right, bg=C["card"])
+        button_row = tk.Frame(action_line, bg=C["card"])
         button_row.pack(side="right", padx=(10, 0))
         pause_button = self._button(button_row, "暂停", lambda c=control: self._pause_model_download(c), "plain", width=56)
         pause_button.pack(side="left", padx=(0, 6))
@@ -3252,6 +3401,13 @@ class GatewayApp(WindowBase):
         control["button"] = button
         control["pause_button"] = pause_button
         control["cancel_button"] = cancel_button
+        self._button(button_row, "选择本地模型", lambda c=control: self._map_local_model(c), "plain", width=104).pack(side="left", padx=(6, 0))
+        if _model_file_ready(target, item.get("size_bytes")):
+            control.update(state="done", status_text="本地模型已就绪", progress_percent=100.0)
+            self._refresh_model_download_views(control)
+        elif not url:
+            control["status_text"] = "未找到下载来源，可选择本地模型"
+            status_var.set(control["status_text"])
         owner = self._model_transfer_for(target)
         if owner is not None and owner is not control:
             control["owner"] = owner
@@ -3263,8 +3419,14 @@ class GatewayApp(WindowBase):
 
     def _bind_model_download_mousewheel_tree(self, widget, canvas):
         def on_mousewheel(event):
-            delta = int(getattr(event, "delta", 0) or 0)
-            button = int(getattr(event, "num", 0) or 0)
+            try:
+                delta = int(getattr(event, "delta", 0) or 0)
+            except (TypeError, ValueError):
+                delta = 0
+            try:
+                button = int(getattr(event, "num", 0) or 0)
+            except (TypeError, ValueError):
+                button = 0
             if delta:
                 units = max(1, abs(delta) // 120)
                 direction = -1 if delta > 0 else 1
@@ -3825,7 +3987,7 @@ class GatewayApp(WindowBase):
             pass
 
     def _open_workflows_dir(self):
-        workflows_dir = BASE_DIR / "workflows"
+        workflows_dir = _workflows_dir()
         workflows_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(str(workflows_dir))
 
@@ -3838,7 +4000,7 @@ class GatewayApp(WindowBase):
         return text[:64]
 
     def _unique_workflow_id(self, base_id: str) -> str:
-        workflows_dir = BASE_DIR / "workflows"
+        workflows_dir = _workflows_dir()
         base_id = self._workflow_slug(base_id)
         candidate = base_id
         index = 2
@@ -3857,30 +4019,7 @@ class GatewayApp(WindowBase):
 
     def _infer_workflow_output_type(self, name: str, data: dict, manifest: dict = None) -> str:
         manifest = manifest or {}
-        raw_type = str(manifest.get("type") or manifest.get("output_type") or "").lower()
-        if "video" in raw_type or "flf2v" in raw_type or "i2v" in raw_type:
-            return "video"
-        if "text" in raw_type or "chat" in raw_type:
-            return "text"
-        if "image" in raw_type or "t2i" in raw_type:
-            return "image"
-
-        text = str(name or "").lower()
-        if any(token in text for token in ("wan", "flf2v", "i2v", "video", "首尾帧", "视频")):
-            return "video"
-        if any(token in text for token in ("text", "chat", "qwen", "deepseek", "llm", "文字")):
-            return "text"
-
-        class_text = " ".join(
-            str(node.get("class_type", "")).lower()
-            for node in data.values()
-            if isinstance(node, dict)
-        )
-        if any(token in class_text for token in ("wan", "videocombine", "vhs_", "saveanimated")):
-            return "video"
-        if "saveimage" in class_text or "ksampler" in class_text or "flux" in class_text:
-            return "image"
-        return "image"
+        return infer_output_type(data, manifest.get("type") or manifest.get("output_type") or "")
 
     def _workflow_description_for_type(self, output_type: str) -> str:
         if output_type == "video":
@@ -3936,7 +4075,7 @@ class GatewayApp(WindowBase):
         if not schema:
             schema = self._workflow_input_schema_for_type(output_type)
         inputs = schema.get("inputs") if isinstance(schema.get("inputs"), list) else workflow.get("inputs")
-        if not isinstance(inputs, list) or not inputs:
+        if not isinstance(inputs, list):
             inputs = self._workflow_input_schema_for_type(output_type).get("inputs", [])
         merged = dict(schema)
         merged["inputs"] = inputs
@@ -3982,7 +4121,7 @@ class GatewayApp(WindowBase):
         output_type = str(workflow.get("output_type") or workflow.get("type") or "image").lower()
         dependency_report = workflow_dependency_report(
             workflow.get("dependencies") or {},
-            BASE_DIR / "models",
+            _models_dir(),
         )
         required_models = list(workflow.get("required_models") or dependency_report["required_models"])
         missing_models = set(workflow.get("missing_models") or dependency_report["missing_models"])
@@ -4001,7 +4140,7 @@ class GatewayApp(WindowBase):
         ]
         inputs = schema.get("inputs") or []
         if not inputs:
-            lines.append("  - prompt (text, 必填)：提示词/文字需求")
+            lines.append("  - 无公开输入参数")
         else:
             for item in inputs:
                 if not isinstance(item, dict):
@@ -4032,7 +4171,7 @@ class GatewayApp(WindowBase):
             "",
             "通用请求字段：",
             "  - model：工作流 ID 或名称，服务端会按客户端同步的工作流列表选择。",
-            "  - prompt：主要文本输入；图片/视频/文字工作流都应支持。",
+            "  - prompt：仅在该工作流的输入参数列表包含此字段时填写。",
             "  - task_id：任务轮询 ID，由客户端生成任务后返回。",
             "",
             "出参结构：",
@@ -4045,6 +4184,7 @@ class GatewayApp(WindowBase):
         title = self._workflow_display_name(workflow)
         model_key = self._workflow_model_key(workflow)
         missing_models = self._missing_model_items(model_key) if model_key else []
+        missing_models = missing_models or workflow.get("missing_models") or []
         popup = tk.Toplevel(self)
         popup.title(f"工作流详情 - {title}")
         popup.geometry("760x560")
@@ -4060,7 +4200,7 @@ class GatewayApp(WindowBase):
 
         def show_downloads():
             popup.destroy()
-            self._show_model_install_help(model_key)
+            self._show_workflow_model_help(workflow)
 
         if missing_models:
             self._button(heading, "安装模型", show_downloads, "primary", width=88).pack(side="right")
@@ -4095,6 +4235,7 @@ class GatewayApp(WindowBase):
             self._footer_label.config(text="  已复制工作流详情")
 
         self._button(actions, "复制详情", copy_text, "primary").pack(side="left", ipadx=12, ipady=5)
+        self._button(actions, "手动填写参数", lambda: (popup.destroy(), self._show_workflow_mapping_editor(workflow)), "plain").pack(side="left", padx=8)
         self._button(actions, "关闭", popup.destroy, "plain").pack(side="right", ipadx=12, ipady=5)
 
     def _load_json_file(self, path: Path, max_bytes: int = 64 * 1024 * 1024) -> dict:
@@ -4144,10 +4285,11 @@ class GatewayApp(WindowBase):
         return dict(manifest)
 
     def _is_comfy_api_workflow(self, data: dict) -> bool:
-        return isinstance(data, dict) and any(
-            isinstance(node, dict) and "class_type" in node
-            for node in data.values()
-        )
+        try:
+            validate_graph(data)
+            return True
+        except (ValueError, TypeError):
+            return False
 
     def _workflow_link_map(self, data: dict) -> dict:
         links = data.get("links") or []
@@ -4190,57 +4332,14 @@ class GatewayApp(WindowBase):
         return widget_inputs
 
     def _convert_front_workflow_to_api(self, data: dict) -> dict:
-        nodes = data.get("nodes")
-        if not isinstance(nodes, list) or not nodes:
-            raise ValueError("普通 ComfyUI 工作流缺少 nodes，无法自动转换为 API 模式。")
-        if data.get("definitions") and any(not isinstance(node.get("type"), str) or len(str(node.get("type"))) > 40 for node in nodes):
-            raise ValueError("该工作流包含子图/模板节点，客户端暂不能安全展开。请在 ComfyUI 中打开后另存为 API Format。")
-
-        link_map = self._workflow_link_map(data)
-        prompt = {}
-        converted_count = 0
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            node_id = node.get("id")
-            class_type = str(node.get("type") or "").strip()
-            if node_id is None or not class_type:
-                continue
-            node_inputs = {}
-            for item in node.get("inputs") or []:
-                if not isinstance(item, dict):
-                    continue
-                link_id = item.get("link")
-                if link_id is None:
-                    continue
-                source = link_map.get(link_id)
-                if source:
-                    name = str(item.get("name") or "").strip()
-                    if name:
-                        node_inputs[name] = source
-
-            widget_names = self._front_workflow_widget_inputs(node)
-            widget_values = node.get("widgets_values") or []
-            if isinstance(widget_values, dict):
-                for name, value in widget_values.items():
-                    node_inputs[str(name)] = value
-            elif isinstance(widget_values, list):
-                for index, value in enumerate(widget_values):
-                    if index < len(widget_names):
-                        node_inputs[widget_names[index]] = value
-
-            prompt[str(node_id)] = {
-                "class_type": class_type,
-                "inputs": node_inputs,
-                "_meta": {
-                    "title": str(node.get("title") or node.get("properties", {}).get("Node name for S&R") or class_type),
-                },
-            }
-            converted_count += 1
-
-        if not converted_count:
-            raise ValueError("没有找到可转换的 ComfyUI 节点。")
-        return prompt
+        try:
+            return convert_editor_workflow(data)
+        except ValueError:
+            install_frontend_bridge(BASE_DIR / 'runtime' / 'ComfyUI')
+            return convert_with_comfyui(
+                data, COMFY_BASE, progress=self._report_workflow_import_progress,
+                cancelled=lambda: self._shutting_down,
+            )
 
     def _find_workflow_json_in_dir(self, folder: Path) -> Path:
         preferred = [
@@ -4312,7 +4411,7 @@ class GatewayApp(WindowBase):
     def _workflow_registry(self) -> WorkflowRegistry:
         return WorkflowRegistry(
             config_path=BASE_DIR / "runtime" / "workflow_config.json",
-            workflows_dir=BASE_DIR / "workflows",
+            workflows_dir=_workflows_dir(),
         )
 
     def _workflow_records_from_registry(self, registry: WorkflowRegistry) -> list[dict]:
@@ -4345,12 +4444,17 @@ class GatewayApp(WindowBase):
             base_name = str(manifest.get("id") or source_stem or Path(source_path).stem)
             workflow_id = self._unique_workflow_id(base_name)
             output_type = self._infer_workflow_output_type(workflow_json.stem, data, manifest)
+            if manifest.get("api_mapping_status") == "ready":
+                adaptation = make_mapping(data, mapping_fields(manifest), output_type)
+            else:
+                adaptation = self._recognize_workflow(data, manifest.get("type", ""))
+            output_type = adaptation["output_type"]
             workflow_name = str(manifest.get("name") or source_stem or workflow_id).strip()[:200]
             if not workflow_name:
                 workflow_name = workflow_id
 
             workflows_dir = ensure_safe_workflows_root(
-                BASE_DIR / "workflows",
+                _workflows_dir(),
                 create=True,
             )
             workflows_root = workflows_dir.resolve(strict=True)
@@ -4370,15 +4474,14 @@ class GatewayApp(WindowBase):
             with open(staging_dir / "workflow.json", "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
-            input_schema = manifest.get("input_schema") or manifest.get("inputSchema")
-            if not isinstance(input_schema, dict) or not input_schema:
-                input_schema = self._workflow_input_schema_for_type(output_type)
+            input_schema = adaptation["input_schema"]
             dependencies = normalize_workflow_dependencies(
                 manifest.get("dependencies") or {},
                 data,
             )
             manifest_data = {
                 **manifest,
+                **adaptation,
                 "id": workflow_id,
                 "name": workflow_name,
                 "type": self._workflow_manifest_type(output_type),
@@ -4417,6 +4520,7 @@ class GatewayApp(WindowBase):
                     workflows = self._workflow_records_from_registry(registry)
                     default_workflow_id = str(registry.default_workflow_id or "")
                     result = {
+                        "adaptation": adaptation,
                         "id": workflow_id,
                         "name": workflow_name,
                         "output_type": output_type,
@@ -4496,6 +4600,11 @@ class GatewayApp(WindowBase):
                 self._post_to_ui(lambda: self._set_light("server", "offline", "同步失败"))
 
     def _show_workflow_import_result(self, result: dict):
+        adaptation = result.get("adaptation") or {}
+        if adaptation.get("api_mapping_status") == "needs_review":
+            messagebox.showwarning("需要手动填写参数", adaptation.get("api_mapping_error", "识别未完成"), parent=self)
+            self._show_workflow_mapping_editor(result)
+            return
         messagebox.showinfo(
             "工作流已导入",
             "工作流已安全放入客户端目录并完成本地注册。\n\n"
@@ -4507,6 +4616,128 @@ class GatewayApp(WindowBase):
             parent=self,
         )
         self._footer_label.config(text=f"  工作流已导入：{result.get('name')}")
+
+    def _check_workflow_recognition_ready(self, workflow_id: str):
+        """Check deployment without loading weights or submitting inference."""
+        self._report_workflow_import_progress("checking_recognition")
+        models_dir = _models_dir()
+        missing = [Path(item["path"]).name for item in MODEL_REQUIREMENTS["Qwen3.5"]["items"]
+                   if not _model_file_ready(models_dir / item["path"], item.get("size_bytes"))]
+        if missing:
+            raise ValueError("Qwen3.5 4B 模型未部署完整：" + "、".join(missing) + "；请手动填写参数")
+        if missing_runtime_paths(BASE_DIR):
+            raise ValueError("本机运行环境未安装完整；请修复运行环境，或手动填写参数")
+        request = ur.Request(f"{API_BASE}/v1/status", headers=self._local_api_headers(), method="GET")
+        try:
+            with ur.urlopen(request, timeout=5) as response:
+                status = json.loads(response.read(4 * 1024 * 1024).decode("utf-8"))
+            if not isinstance(status, dict):
+                raise ValueError("状态格式无效")
+        except Exception as exc:
+            raise ValueError("无法确认本机服务状态（离线、鉴权失败或检查超时）；请手动填写参数") from exc
+        if (status.get("runtime") or {}).get("status") != "installed":
+            raise ValueError("本机运行环境未就绪；请修复运行环境，或手动填写参数")
+        if (status.get("comfyui") or {}).get("status") != "online":
+            raise ValueError("ComfyUI 未启动或无法连接；请启动后台，或手动填写参数")
+        if self._comfyui_update_task_active(status):
+            raise ValueError("后台正在执行任务，本次跳过 4B 识别；请手动填写参数")
+        workflow = next((item for item in (status.get("workflows") or [])
+                         if isinstance(item, dict) and item.get("id") == workflow_id), None)
+        if not workflow:
+            raise ValueError("后台尚未加载 Qwen3.5 4B 工作流；请刷新工作流，或手动填写参数")
+        if workflow.get("missing_models"):
+            raise ValueError("Qwen3.5 4B 缺少模型：" + "、".join(map(str, workflow["missing_models"])) + "；请手动填写参数")
+        if workflow.get("missing_nodes"):
+            raise ValueError("Qwen3.5 4B 缺少节点：" + "、".join(map(str, workflow["missing_nodes"])) + "；请手动填写参数")
+        if not workflow.get("available"):
+            raise ValueError("Qwen3.5 4B 工作流不可用或依赖尚未验证；请手动填写参数")
+
+    def _call_workflow_recognition_llm(self, prompt: str) -> str:
+        """One bounded call through the existing local text workflow."""
+        registry = self._workflow_registry()
+        workflow = registry.resolve("llm_qwen3_text_gen")
+        if workflow is None:
+            raise ValueError("Qwen3.5 4B 工作流未安装或未启用，请先准备现有文字模型")
+        self._check_workflow_recognition_ready(workflow.id)
+        self._report_workflow_import_progress("recognition_inference")
+        request = ur.Request(
+            f"{API_BASE}/v1/chat/completions",
+            data=json.dumps({"model": workflow.id, "prompt": prompt,
+                             "response_format": {"type": "json_object"}, "timeout": 120}).encode("utf-8"),
+            headers={**self._local_api_headers(), "Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with ur.urlopen(request, timeout=130) as response:
+                payload = json.loads(response.read(128000).decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("本机 4B 不可用、繁忙或超时；请检查模型环境，或手动填写。超时任务可能仍在运行") from exc
+        if payload.get("workflow") != workflow.id:
+            raise ValueError("文字接口返回了其他工作流，已停止识别")
+        return payload["choices"][0]["message"]["content"]
+
+    def _recognize_workflow(self, graph: dict, declared: str = "") -> dict:
+        self._report_workflow_import_progress('recognizing')
+        result = analyze_workflow(graph, declared)
+        if result["api_mapping_status"] == "ready":
+            return result
+        object_info = None
+        try:
+            with ur.urlopen(f"{COMFY_BASE}/object_info", timeout=2) as response:
+                object_info = json.loads(response.read(8 * 1024 * 1024).decode("utf-8"))
+            if not isinstance(object_info, dict):
+                object_info = None
+        except Exception:
+            pass
+        return analyze_workflow(graph, declared, object_info, self._call_workflow_recognition_llm)
+
+    def _show_workflow_mapping_editor(self, workflow: dict):
+        """Manual escape hatch after a rule/model failure, using the same validator."""
+        try:
+            registry = self._workflow_registry()
+            wf = registry.get(str(workflow.get("id") or ""))
+            if wf is None or wf.folder is None:
+                raise ValueError("工作流不存在，请刷新列表")
+            graph = self._load_json_file(wf.folder / "workflow.json")
+            validate_graph(graph)
+            expected_hash = graph_hash(graph)
+            mapping = {**wf.api_mapping, "input_schema": wf.input_schema}
+            draft = {"output_type": infer_output_type(graph, wf.workflow_type),
+                     "fields": mapping_fields(mapping) if wf.api_mapping else mapping_fields(analyze_workflow(graph, wf.workflow_type))}
+        except Exception as exc:
+            messagebox.showerror("无法设置参数", str(exc), parent=self)
+            return
+        popup = tk.Toplevel(self)
+        popup.title(f"手动填写参数 - {wf.name}")
+        popup.geometry("820x680")
+        popup.configure(bg=C["bg"])
+        tk.Label(popup, text="填写公开参数：name 为调用名，type 为类型，targets 为节点位置。保存前会校验。\n"
+                 "示例：{\"name\":\"prompt\",\"type\":\"text\",\"targets\":[{\"node_id\":\"6\",\"input\":\"text\"}]}",
+                 bg=C["bg"], fg=C["text"], justify="left", wraplength=780).pack(fill="x", padx=16, pady=12)
+        editor = tk.Text(popup, height=18, wrap="none", bg=C["entry"], fg=C["text"], insertbackground=C["text"])
+        editor.pack(fill="both", expand=True, padx=16)
+        editor.insert("1.0", json.dumps(draft, ensure_ascii=False, indent=2))
+        tk.Label(popup, text="可填写的节点字段（只读参考）", bg=C["bg"], fg=C["text"]).pack(anchor="w", padx=16, pady=6)
+        reference = tk.Text(popup, height=7, wrap="word", bg=C["entry"], fg=C["text"])
+        reference.pack(fill="x", padx=16)
+        reference.insert("1.0", json.dumps(candidates(graph), ensure_ascii=False, indent=2))
+        reference.config(state="disabled")
+        status = tk.Label(popup, text="", bg=C["bg"], fg=C["text"], wraplength=780)
+        status.pack(fill="x", padx=16)
+
+        def save():
+            try:
+                raw = editor.get("1.0", "end").strip()
+                if len(raw) > 250000:
+                    raise ValueError("参数配置过大")
+                data = json.loads(raw)
+                registry.save_mapping(wf.id, data.get("fields"), data.get("output_type"), expected_hash)
+                self._publish_local_workflows(self._workflow_records_from_registry(registry), str(registry.default_workflow_id or ""))
+                threading.Thread(target=self._reload_workflows_and_sync, daemon=True).start()
+                popup.destroy()
+            except Exception as exc:
+                status.config(text=f"保存失败：{exc}")
+
+        self._button(popup, "校验并保存", save, "primary").pack(pady=12)
 
     def _begin_workflow_operation(self, name: str) -> bool:
         if self._shutting_down or self._runtime_maintenance_active():
@@ -4551,6 +4782,7 @@ class GatewayApp(WindowBase):
             self._dashboard_pages.refresh(data)
 
     def _finish_workflow_import(self, result: dict, popup=None):
+        self._clear_workflow_import_progress()
         if self._shutting_down:
             return
         try:
@@ -4567,6 +4799,7 @@ class GatewayApp(WindowBase):
         self._post_to_ui(lambda data=dict(result): self._show_workflow_import_result(data), delay=50)
 
     def _fail_workflow_operation(self, title: str, error: str, popup=None):
+        self._clear_workflow_import_progress()
         if self._shutting_down:
             return
         parent = self
@@ -4602,6 +4835,27 @@ class GatewayApp(WindowBase):
             return
         self._run_workflow_import(Path(path), popup)
 
+    def _clear_workflow_import_progress(self):
+        bar = self.__dict__.pop('_workflow_import_progress', None)
+        if bar is not None:
+            bar.stop()
+            bar.destroy()
+
+    def _report_workflow_import_progress(self, stage):
+        if self.__dict__.get('_workflow_import_progress') is None or self._shutting_down:
+            return
+        labels = {
+            'starting': '正在启动后台转换', 'loading': '正在加载工作流和节点',
+            'serializing': '正在转换为 API 结构', 'converted': '转换完成，正在保存',
+            'recognizing': '正在识别输入参数，必要时调用本地模型',
+            'checking_recognition': '正在检查 4B 模型与后台状态',
+            'recognition_inference': '正在调用本地 4B 识别输入参数',
+        }
+        def update():
+            if self.__dict__.get('_workflow_import_progress') is not None:
+                self._footer_label.config(text='  ' + labels.get(stage, '正在导入工作流'))
+        self._post_to_ui(update)
+
     def _run_workflow_import(self, source_path: Path, popup=None):
         if not self._begin_workflow_operation("工作流导入"):
             return
@@ -4613,6 +4867,13 @@ class GatewayApp(WindowBase):
             pass
         popup = None
         self._footer_label.config(text="  正在安全检查并导入工作流...")
+        self._clear_workflow_import_progress()
+        if isinstance(self._footer_label, tk.Widget):
+            self._workflow_import_progress = ttk.Progressbar(
+                self._footer_label.master, mode='indeterminate', length=120,
+                style='Progress.Horizontal.TProgressbar')
+            self._workflow_import_progress.pack(side='left', padx=8)
+            self._workflow_import_progress.start(12)
 
         def worker():
             try:
@@ -4638,6 +4899,7 @@ class GatewayApp(WindowBase):
         try:
             threading.Thread(target=worker, daemon=True).start()
         except Exception:
+            self._clear_workflow_import_progress()
             self._end_workflow_operation()
             raise
 
@@ -4707,7 +4969,7 @@ class GatewayApp(WindowBase):
                 raise ValueError("工作流文件无法读取，暂时不能设为默认") from error
             if not self._is_comfy_api_workflow(workflow_data):
                 raise ValueError("工作流不是可调用的 ComfyUI API 格式")
-            dependency = workflow_dependency_report(workflow.dependencies, BASE_DIR / "models")
+            dependency = workflow_dependency_report(workflow.dependencies, _models_dir())
             if dependency["missing_models"]:
                 raise ValueError("请先安装这个工作流需要的模型，再设为默认工作流")
             health_workflows = (self._last_health or {}).get("workflows") or []
@@ -4734,7 +4996,7 @@ class GatewayApp(WindowBase):
             "最快的添加方式\n\n"
             "1. 在 ComfyUI 中把工作流导出为 API Format JSON。\n"
             "2. 点击下方“选择 JSON / ZIP”，其余注册步骤由客户端自动完成。\n"
-            "3. 回到“我的工作流”查看缺少的模型或节点；模型统一在“模型与环境”中维护。\n\n"
+            "3. 回到“模型与环境”查看工作流状态，配置输入与输出，并补齐缺少的模型或节点。\n\n"
             "客户端会根据工作流内容识别文字、图片或视频输出，并生成稳定的英文工作流 ID。"
             "调用方只需使用客户端提供的 URL + Key，并把该 ID 放在 model 参数中。\n\n"
             "也可以选择一个完整工作流文件夹。文件夹只应包含工作流 JSON、manifest 和少量说明/预览资源，"
@@ -6423,17 +6685,11 @@ class GatewayApp(WindowBase):
         value = str(url or "").strip().rstrip("/")
         try:
             parsed = urlsplit(value)
-            port = parsed.port
             valid = (
                 parsed.scheme.lower() == "http"
                 and str(parsed.hostname or "").lower() in _LOOPBACK_SERVER_HOSTS
-                and parsed.username is None
-                and parsed.password is None
-                and port is not None
-                and 1 <= port <= 65535
+                and parsed.port is not None
                 and parsed.path in ("", "/")
-                and not parsed.query
-                and not parsed.fragment
             )
         except ValueError:
             valid = False
@@ -6950,7 +7206,7 @@ class GatewayApp(WindowBase):
         if not workflows:
             try:
                 workflows = read_local_workflow_catalog(
-                    BASE_DIR / "workflows",
+                    _workflows_dir(),
                     BASE_DIR / "runtime" / "workflow_config.json",
                 )
             except (OSError, ValueError):
@@ -7042,7 +7298,7 @@ class GatewayApp(WindowBase):
             return bool(workflow.get("available"))
         dependencies = workflow.get("dependencies")
         if isinstance(dependencies, dict):
-            report = workflow_dependency_report(dependencies, BASE_DIR / "models")
+            report = workflow_dependency_report(dependencies, _models_dir())
             if report["dependency_status"] != "ready":
                 return False
         for key in ("missing_models", "missingModels", "missing"):
@@ -7257,8 +7513,75 @@ class GatewayApp(WindowBase):
         self._footer_label.config(text="  已复制调用示例到剪贴板")
         self.after(3000, lambda: self._footer_label.config(text=""))
 
+    def _storage_directory(self, name: str) -> Path:
+        getters = {
+            "models": _models_dir,
+            "workflows": _workflows_dir,
+            "outputs": _outputs_dir,
+            "logs": _logs_dir,
+        }
+        try:
+            return getters[name]()
+        except KeyError as exc:
+            raise ValueError(f"未知文件目录：{name}") from exc
+
+    def _choose_storage_directory(self, name: str):
+        labels = {
+            "models": "模型",
+            "workflows": "工作流",
+            "outputs": "生成结果",
+            "logs": "运行日志",
+        }
+        label = labels.get(name)
+        if not label:
+            messagebox.showerror("无法设置目录", "未识别的目录类型。", parent=self)
+            return
+        current = self._storage_directory(name)
+        selected = filedialog.askdirectory(
+            title=f"选择{label}目录",
+            initialdir=str(current),
+            mustexist=True,
+            parent=self,
+        )
+        if not selected:
+            return
+        try:
+            config = Config(BASE_DIR)
+            saved = config.set_directory_mapping(name, selected)
+            mapped = bool(config.get(f"directories.{name}", ""))
+        except (KeyError, OSError, RuntimeError, ValueError) as exc:
+            messagebox.showerror(
+                "目录设置失败",
+                f"所选位置当前不可用，请重新选择。\n\n{exc}",
+                parent=self,
+            )
+            return
+
+        if hasattr(self, "_dashboard_pages"):
+            self._dashboard_pages.update_storage_path(name, saved)
+        action = "目录映射已保存" if mapped else "已恢复默认目录"
+        self._footer_label.config(text=f"  {label}{action}，重新打开客户端后生效")
+        def scan_selected():
+            try:
+                patterns = {"models": ("*.safetensors", "*.ckpt", "*.pt", "*.pth", "*.bin", "*.gguf"),
+                            "workflows": ("manifest.json",),
+                            "outputs": ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.mp4", "*.webm")}
+                count = sum(1 for pattern in patterns.get(name, ()) for entry in saved.rglob(pattern) if entry.is_file())
+                message = f"  {label}新目录扫描完成：发现 {count} 个文件；重新打开客户端后使用新目录"
+            except OSError:
+                message = f"  {label}目录已保存，部分内容无法读取；请检查目录权限"
+            self.after(0, lambda: self._footer_label.config(text=message))
+        threading.Thread(target=scan_selected, daemon=True).start()
+        messagebox.showinfo(
+            action,
+            f"{label}将使用：\n{saved}\n\n"
+            "请退出并重新打开灵境造片厂后生效。\n"
+            "原目录中的文件不会自动搬移；如果所选目录以后不存在，客户端会自动恢复默认位置。",
+            parent=self,
+        )
+
     def _open_outputs(self):
-        outputs_dir = BASE_DIR / "outputs"
+        outputs_dir = _outputs_dir()
         outputs_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(str(outputs_dir))
 
@@ -7266,7 +7589,7 @@ class GatewayApp(WindowBase):
         self._open_outputs_for_items(self._last_completed_outputs or [], self._last_completed_task_id)
 
     def _open_outputs_for_items(self, outputs: list, task_id: str = ""):
-        outputs_dir = BASE_DIR / "outputs"
+        outputs_dir = _outputs_dir()
         outputs_dir.mkdir(parents=True, exist_ok=True)
         outputs_root = outputs_dir.resolve()
         task_id = str(task_id or "").strip()
@@ -7304,7 +7627,7 @@ class GatewayApp(WindowBase):
         os.startfile(str(outputs_dir))
 
     def _open_models(self):
-        models_dir = BASE_DIR / "models"
+        models_dir = _models_dir()
         models_dir.mkdir(parents=True, exist_ok=True)
         os.startfile(str(models_dir))
 
@@ -7611,7 +7934,7 @@ class GatewayApp(WindowBase):
             raise
 
     def _start_comfyui_update(self):
-        """Download and transactionally install the latest official stable Core."""
+        """Update Git installs by fast-forward; package installs use the swap worker."""
         if self._shutting_down:
             return
         if self._comfyui_update_task_active(self._last_health):
@@ -7630,14 +7953,7 @@ class GatewayApp(WindowBase):
             )
             self._open_runtime_maintenance()
             return
-        if os.path.lexists(str(live_core / ".git")):
-            messagebox.showinfo(
-                "未自动更新用户管理的 ComfyUI",
-                "检测到这个 ComfyUI 由 Git 管理。为避免覆盖你的分支或修改，"
-                "客户端不会自动更新它。",
-                parent=self,
-            )
-            return
+        git_installation = os.path.lexists(str(live_core / ".git"))
 
         reserved, running_before, reserve_error = self._reserve_runtime_maintenance()
         if not reserved:
@@ -7744,15 +8060,28 @@ class GatewayApp(WindowBase):
                             indeterminate=True,
                         )
 
+                if git_installation:
+                    post_progress(30, "更新 Git 安装", "检查本地修改并获取官方稳定版", indeterminate=True)
+                    git_result = update_git_comfyui(live_core, python_executable=sys.executable, channel_callback=lambda detail:
+                        post_progress(30, '更新 Git 安装', detail, indeterminate=True))
+                    finish_without_handoff(
+                        ("国内镜像暂无更新" if git_result.get('source') == 'domestic' else "ComfyUI 已是最新版")
+                        if git_result['status'] == 'up_to_date' else "ComfyUI 更新完成",
+                        f"Git 安装：v{git_result['version']}。现有分支、模型和自定义节点已保留。",
+                    )
+                    return
                 prepared = prepare_comfyui_update(
                     BASE_DIR,
                     progress_callback=report_download,
+                    channel_callback=lambda detail: post_progress(18, '连接更新渠道', detail, indeterminate=True),
                 )
                 if prepared.status == "up_to_date":
                     version = str(prepared.release_metadata.get("version") or "")
                     finish_without_handoff(
-                        "ComfyUI 已是最新版",
-                        f"当前已是官方最新稳定版 v{version}。" if version else "当前已是官方最新稳定版。",
+                        "国内镜像暂无更新" if prepared.release_metadata.get('source') == 'domestic' else "ComfyUI 已是最新版",
+                        (f"当前版本无需更新；国内镜像已同步到 v{version}，可能晚于上游。"
+                         if prepared.release_metadata.get('source') == 'domestic'
+                         else f"当前已是官方最新稳定版 v{version}。"),
                     )
                     return
                 if prepared.status == "full_environment_required":
@@ -7820,7 +8149,9 @@ class GatewayApp(WindowBase):
                     self._cleanup_comfyui_update_paths(prepared, manifest)
                 finish_without_handoff(
                     "ComfyUI 更新失败",
-                    "更新未应用，本地 ComfyUI 保持原样。\n\n"
+                    ("Git 更新未完成，请检查下方原因。客户端没有执行强制重置。\n\n"
+                     if git_installation else "更新未应用，本地 ComfyUI 保持原样。\n\n")
+                    +
                     f"详细信息：{exc}",
                     error=True,
                 )
@@ -7951,7 +8282,7 @@ class GatewayApp(WindowBase):
             if not allow_unsafe:
                 self._footer_label.config(text="  已取消高风险模型导入")
                 return
-        models_dir = BASE_DIR / "models"
+        models_dir = _models_dir()
         transfer_lock, transfers = self._model_transfer_state()
         with transfer_lock:
             if (
@@ -8163,6 +8494,8 @@ class GatewayApp(WindowBase):
     # ══════════════════════════════════════════════════════
     def _backend_env(self):
         python_exe = sys.executable  # 使用当前 venv Python（GUI 自己）
+        from app.core.python_import_paths import ensure_portable_import_order
+        ensure_portable_import_order(python_exe)
         env = os.environ.copy()
         env["PYTHONPATH"] = str(BASE_DIR)
         env["PYTHONNOUSERSITE"] = "1"
@@ -8170,7 +8503,7 @@ class GatewayApp(WindowBase):
         return python_exe, env
 
     def _backend_log_dir(self) -> Path:
-        log_dir = BASE_DIR / "runtime" / "logs"
+        log_dir = _logs_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
 
@@ -8206,11 +8539,10 @@ class GatewayApp(WindowBase):
         python_exe, env = self._backend_env()
         log_dir = self._backend_log_dir()
         # 确保 outputs 目录存在
-        outputs_dir = BASE_DIR / "outputs"
+        outputs_dir = _outputs_dir()
         outputs_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── ComfyUI 使用相对路径 output-directory ──
-        # ComfyUI cwd = runtime/ComfyUI，相对路径 ../../outputs 指向根目录 outputs/
+        # ComfyUI 直接使用当前有效的生成结果目录，支持其他盘符和中文路径。
         port_ready, port_error = self._process_supervisor.prepare_port(COMFY_PORT)
         if not port_ready:
             self._comfy_proc = None
@@ -8218,13 +8550,17 @@ class GatewayApp(WindowBase):
             self._footer_label.config(text=f"  ComfyUI 无法启动：{port_error}")
             print(f"[GUI] ComfyUI start blocked: {port_error}")
         else:
+            try:
+                install_frontend_bridge(BASE_DIR / 'runtime' / 'ComfyUI')
+            except Exception as exc:
+                print(f"[Workflow] 原生转换扩展准备失败（不影响已有 API 工作流）：{exc}")
             comfy_log = self._open_backend_log("comfyui.log")
             comfy_command = [
                 str(python_exe), "-s", "-B", "main.py",
                 "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
                 "--disable-auto-launch",
                 *_comfy_vram_args(),
-                "--output-directory", "../../outputs",
+                "--output-directory", str(outputs_dir),
                 "--extra-model-paths-config", "extra_model_paths.yaml",
             ]
             try:
@@ -8237,7 +8573,7 @@ class GatewayApp(WindowBase):
                 )
             finally:
                 comfy_log.close()
-            print("[GUI] ComfyUI starting (cwd=runtime/ComfyUI, output=../../outputs)...")
+            print(f"[GUI] ComfyUI starting (output={outputs_dir})...")
 
     def _start_api_service(self):
         lock = self._runtime_maintenance_lock
@@ -8580,6 +8916,10 @@ class GatewayApp(WindowBase):
             return
         self._last_health = data
         self._update_status(data)
+        # Every health snapshot can move a workflow from "loading" to its real
+        # dependency state. The display fingerprint prevents unchanged polls
+        # from rebuilding the tree, so startup refreshes automatically without
+        # bringing back the old periodic flicker.
         self._update_workflow_display(data)
         if hasattr(self, "_dashboard_pages"):
             self._dashboard_pages.refresh(data)
@@ -8594,6 +8934,10 @@ class GatewayApp(WindowBase):
         comfy_data = data.get("comfyui", {})
 
         self._set_local_url(data.get("local_api") or self._local_url or API_BASE)
+        if self.__dict__.get("_lan_url_label") is not None:
+            addresses = data.get("lan_urls") or []
+            self._lan_url = addresses[0] if addresses else ""
+            self._lan_url_label.config(text=self._lan_url or "局域网不可用，请用公网 URL")
 
         self._set_light("api", "online")
 
@@ -8836,7 +9180,7 @@ class GatewayApp(WindowBase):
         self._clear_public_url()
         self._key_label.config(text="（无法连接）")
         self._url_label.config(text="API 服务启动失败")
-        self._footer_label.config(text="服务启动失败 — 查看 runtime/logs/")
+        self._footer_label.config(text="服务启动失败 — 请在设置中打开运行日志")
 
     def _on_health_degraded(self, message: str = ""):
         """The API answered /health, so retain the last trusted component state."""
@@ -8850,6 +9194,19 @@ class GatewayApp(WindowBase):
     # ══════════════════════════════════════════════════════
     # 工作流更新
     # ══════════════════════════════════════════════════════
+    def _workflow_display_fingerprint(
+        self,
+        workflows: list,
+        default_workflow_id: str = "",
+    ) -> str:
+        """Return a stable snapshot of the state rendered by the workflow tree."""
+        payload = {
+            "workflows": workflows if isinstance(workflows, list) else [],
+            "default_workflow_id": str(default_workflow_id or ""),
+            "models": getattr(self, "_model_status", {}),
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
     def _update_workflow_display(self, data: dict):
         """按本地 API 返回的工作流列表动态刷新界面。"""
         if not hasattr(self, "_wf_sections"):
@@ -8865,12 +9222,20 @@ class GatewayApp(WindowBase):
             remote_workflows = []
         try:
             local_workflows = read_local_workflow_catalog(
-                BASE_DIR / "workflows",
+                _workflows_dir(),
                 BASE_DIR / "runtime" / "workflow_config.json",
             )
         except (OSError, ValueError):
             local_workflows = []
         workflows = merge_workflow_catalog(local_workflows, remote_workflows)
+        default_workflow_id = (
+            str(data.get("default_workflow_id") or data.get("default_workflow") or "").strip()
+            if isinstance(data, dict)
+            else ""
+        )
+        fingerprint = self._workflow_display_fingerprint(workflows, default_workflow_id)
+        if fingerprint == getattr(self, "_workflow_display_fingerprint_value", ""):
+            return
 
         for box in self._wf_sections.values():
             for child in box.winfo_children()[1:]:
@@ -8883,11 +9248,6 @@ class GatewayApp(WindowBase):
 
         valid_ids = set()
         first_valid_id = ""
-        default_workflow_id = (
-            str(data.get("default_workflow_id") or data.get("default_workflow") or "").strip()
-            if isinstance(data, dict)
-            else ""
-        )
         for workflow in workflows:
             if not isinstance(workflow, dict):
                 continue
@@ -8941,6 +9301,7 @@ class GatewayApp(WindowBase):
                     pass
 
             self.after_idle(restore_scroll_position)
+        self._workflow_display_fingerprint_value = fingerprint
 
     # ══════════════════════════════════════════════════════
     # 系统托盘

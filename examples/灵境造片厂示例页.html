@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>灵境造片厂｜本地 API 示例页</title>
+  <title>灵境造片厂｜创作工作室</title>
   <style>
     :root {
       --ink: #f4f2ec;
@@ -597,6 +597,173 @@
       .generate-btn { width: 100%; }
       footer { flex-direction: column; }
     }
+
+    /* Project studio: persistent navigation, a quiet canvas and bottom composer. */
+    :root { --bg:#101112; --panel:#191a1c; --panel-2:#222326; --line:#303236; --signal:#a6e8df; }
+    body { background:#101112; font-family:"Microsoft YaHei UI","PingFang SC",sans-serif; }
+    main { width:auto!important; max-width:none!important; margin:0 0 0 230px!important; padding:80px 38px 24px!important; }
+    header,.intro,footer,.endpoint-chip,.brand,.local-tag { display:none!important; }
+    .side-panel { position:fixed; inset:0 auto 0 0; width:230px; border:0; border-radius:0; padding:26px 16px; background:#18191b; display:flex; flex-direction:column; z-index:10; }
+    .sidebar-brand { font-weight:700; font-size:21px; padding:0 10px 32px; letter-spacing:1px; }
+    .sidebar-brand small { display:block; font-size:9px; color:#777e83; letter-spacing:2.2px; margin-top:8px; }
+    .nav-item { text-align:left; background:transparent; border:0; padding:13px 14px; color:#aaa; border-radius:9px; margin-bottom:5px; cursor:pointer; }
+    .nav-item.active,.nav-item:hover { color:#e7faf7; background:#272b2c; }
+    .project-heading { display:flex; justify-content:space-between; align-items:center; color:#777; font-size:12px; padding:26px 10px 12px; }
+    .project-heading button { border:0; background:none; color:#aaa; font-size:23px; cursor:pointer; }
+    .project-list { overflow:auto; flex:1; }
+    .project-list button { display:block; border:0; width:100%; text-align:left; padding:12px; border-radius:8px; background:none; color:#999; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+    .project-list button.selected { background:#2a2b2e; color:#eee; }
+    .sidebar-foot { color:#696e72; font-size:11px; line-height:1.9; padding:20px 10px 0; }
+    .privacy-note,.side-panel .model-detail { display:none; }
+    .connection { position:absolute; right:30px; top:18px; width:min(720px,calc(100% - 290px)); z-index:20; padding:0; border:0; background:transparent; margin:0; }
+    .connection summary { width:max-content; margin-left:auto; list-style:none; border:1px solid #343638; border-radius:10px; padding:10px 16px; font-size:12px; cursor:pointer; background:#1b1d1f; }
+    .connection[open] { padding:12px; background:#1b1d1f; border:1px solid #343638; border-radius:14px; box-shadow:0 16px 50px #0008; }
+    .connection-grid { grid-template-columns:1fr 1fr auto; gap:12px; margin-top:14px; }
+    .connection label small { display:none; }
+    .connection input { font-size:12px; min-height:40px; padding:10px; }
+    .connection .primary-btn { font-size:12px; padding:10px 14px; min-height:40px; }
+    .connection-state { font-size:11px; margin-top:10px; }
+    .workbench { display:block; margin:0; }
+    .studio-panel { background:transparent; border:0; border-radius:0; overflow:visible; max-width:1080px; margin:auto; }
+    .studio-head { border:0; padding:0 0 14px; }
+    .project-name { background:transparent!important; border:0!important; padding:0!important; color:#ddd; font-size:15px!important; min-height:28px!important; width:260px!important; }
+    .studio-head h2 { font-size:12px; font-weight:400; color:#777; margin-top:7px; }
+    #studioSubtitle { display:none; }
+    .studio-grid { display:flex; flex-direction:column-reverse; min-height:calc(100vh - 175px); }
+    .result-panel { flex:1; padding:10px 0 24px; border:0; min-height:360px; }
+    .result-stage { min-height:300px; border:0; background:transparent; border-radius:12px; }
+    .result-stage .media-result { max-height:55vh; object-fit:contain; }
+    .result-top { margin:0 0 12px; color:#888; }
+    .result-title { font-size:12px; font-weight:400; }
+    .empty-result { max-width:440px; color:#737a7d; font-size:13px; }
+    .empty-result b { color:#b9c3c5; font-size:23px; margin:18px 0 12px; font-weight:400; }
+    .empty-mark { font-size:42px; color:#a6e8df; }
+    .composer { position:sticky; bottom:14px; z-index:5; border:1px solid #343639; padding:20px 22px 16px; border-radius:22px; background:#1d1f20; box-shadow:0 14px 40px #0005; }
+    .model-card { flex-wrap:wrap; position:relative; padding:0 0 14px; margin:0; display:flex; align-items:center; gap:12px; }
+    .model-card .field { flex:1; }
+    .model-card .model-detail { flex-basis:100%; min-height:0; margin:0; padding:0; background:none; font-size:11px; color:#777; }
+    .model-card .model-detail strong { display:inline; margin-right:8px; font-size:11px; }
+    .model-card label { display:none; }
+    .model-card select { min-height:36px; padding:7px 12px; font-size:13px; background:#292c2e; border:0; width:100%; }
+    .model-card .ghost-btn { min-height:34px; font-size:11px; }
+    #dynamicInputs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; max-height:36vh; overflow:auto; }
+    #dynamicInputs .field { margin:0!important; min-width:0; }
+    #dynamicInputs .prompt-field { grid-column:1/-1; }
+    #dynamicInputs textarea { min-height:72px!important; padding:12px; background:#161819; font-size:14px; }
+    #dynamicInputs input,#dynamicInputs select { min-height:36px; padding:8px 10px; font-size:12px; }
+    #dynamicInputs label { font-size:11px; color:#9b9fa1; margin-bottom:6px; }
+    .composer-actions { margin-top:14px; padding:0; gap:20px; }
+    .generate-btn { min-height:40px; border-radius:12px; padding:10px 25px; font-size:13px; }
+    .request-hint { font-size:10px; }
+    .project-history { display:flex; gap:10px; overflow:auto; margin-bottom:18px; }
+    .history-card { flex:0 0 210px; text-align:left; color:#c5cacc; background:#1b1d1f; border:1px solid #303335; border-radius:12px; padding:15px; cursor:pointer; }
+    .history-card small { display:block; color:#788184; font-size:10px; margin-top:9px; }
+    .project-history.asset-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); }
+    button:focus-visible,summary:focus-visible { outline:2px solid #a6e8df; outline-offset:3px; }
+    @media(max-width:850px) { main { margin-left:175px!important; padding:85px 18px 20px!important; } .side-panel { width:175px; padding:22px 10px; } .sidebar-brand { font-size:17px; } .connection { width:calc(100% - 205px); right:15px; } .connection-grid { grid-template-columns:1fr; } #dynamicInputs { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media(max-width:550px) { main { margin-left:0!important; padding:136px 12px 16px!important; } .side-panel { position:relative; width:100%; height:auto; padding:12px; display:block; } .sidebar-brand,.sidebar-foot,.project-heading { display:none; } .nav-item { display:inline-block; padding:8px 12px; } .project-list { display:flex; } .project-list button { width:auto; max-width:180px; } .connection { top:98px; right:12px; width:calc(100% - 24px); } .composer { position:relative; bottom:0; padding:15px; } }
+
+    .connection { top:16px; right:28px; width:min(630px,calc(100% - 290px)); padding:8px 10px; border:1px solid #303335; border-radius:10px; background:#191b1d; box-shadow:none; }
+    .connection-grid { display:grid; grid-template-columns:1.15fr 1fr auto; margin:0; gap:7px; align-items:center; }
+    .connection-grid label { display:none; }
+    .connection input { min-height:30px; height:30px; font-size:11px; padding:6px 9px; }
+    .connection .primary-btn { min-height:30px; height:30px; padding:4px 13px; }
+    .connection .key-toggle { font-size:10px; padding:2px 5px; right:5px; }
+    .connection-state { margin:4px 0 0; font-size:10px; line-height:12px; }
+    .composer { position:relative; bottom:auto; padding:16px 20px; }
+    #dynamicInputs { grid-template-columns:minmax(0,1fr) 290px; gap:9px 22px; max-height:370px; align-items:start; }
+    #dynamicInputs .prompt-field { grid-column:1; }
+    #dynamicInputs .field[hidden] { display:none!important; }
+    #dynamicInputs textarea { min-height:105px!important; }
+    #dynamicInputs input,#dynamicInputs select { min-height:30px; height:30px; padding:5px 8px; }
+    .resolution-row { display:flex; gap:5px; align-items:center; }
+    #dynamicInputs .resolution-row select { flex:1; min-width:0; width:120px; font-size:10px; }
+    #dynamicInputs .resolution-row input { width:58px; padding:4px; font-size:11px; }
+    .resolution-row span { color:#777; font-size:11px; }
+    .reference-rail { display:flex; flex-wrap:wrap; gap:10px; }
+    .reference-slot { position:relative; width:76px; }
+    #dynamicInputs .reference-tile { position:relative; display:flex; align-items:center; justify-content:center; width:70px; height:70px; border:1px dashed #555c5e; border-radius:12px; background:#25292b; cursor:pointer; overflow:hidden; }
+    .reference-tile span { font-size:30px; color:#9ca9ad; font-weight:300; }
+    #dynamicInputs .reference-tile input { position:absolute; inset:0; opacity:0; width:100%; height:100%; cursor:pointer; }
+    .reference-tile img { width:100%; height:100%; object-fit:cover; }
+    .reference-tile [hidden],.reference-remove[hidden] { display:none!important; }
+    .reference-remove { position:absolute; top:-5px; right:0; width:20px; height:20px; border:1px solid #555; border-radius:50%; background:#202426; color:#ddd; cursor:pointer; }
+    #dynamicInputs .reference-slot>label:not(.reference-tile) { font-size:10px; text-align:center; display:block; margin-top:5px; }
+    @media(max-width:850px) { #dynamicInputs { grid-template-columns:minmax(0,1fr) 235px; gap:10px; } .connection { right:15px; } .resolution-row { flex-wrap:wrap; } }
+    @media(max-width:600px) { #dynamicInputs { display:flex; flex-direction:column; max-height:450px; } #dynamicInputs>.field { width:100%; } .connection { width:calc(100% - 24px); top:98px; right:12px; } .connection-grid { grid-template-columns:1fr 1fr auto; } .resolution-row { flex-wrap:nowrap; } }
+    .writing-column,.settings-column { display:flex; flex-direction:column; gap:12px; min-width:0; }
+    .settings-column { border-left:1px solid #34383a; padding-left:16px; }
+    #dynamicInputs { max-height:310px; }
+    .connection .key-toggle { top:50%; transform:translateY(-50%); }
+
+    /* Entire composer lives in the right sidebar; the center is the canvas. */
+    @media(min-width:901px) {
+      main { margin-right:350px!important; padding:86px 28px 24px!important; }
+      .studio-panel { max-width:none; }
+      .studio-grid { min-height:calc(100vh - 175px); }
+      .composer { position:fixed; top:88px; bottom:16px; right:16px; width:320px;
+        padding:16px; border-radius:16px; display:flex; flex-direction:column;
+        overflow:auto; box-shadow:none; }
+      .model-card { flex-shrink:0; gap:8px; }
+      .model-card .field { flex-basis:100%; }
+      .model-card .ghost-btn { padding:5px 10px; min-height:28px; }
+      .model-card .model-detail { font-size:10px; line-height:1.6; }
+      #dynamicInputs { display:flex; flex-direction:column; max-height:none; overflow:visible; gap:16px; flex-shrink:0; }
+      .writing-column,.settings-column { width:100%; }
+      .settings-column { border-left:0; border-top:1px solid #34383a; padding:14px 0 0; }
+      #dynamicInputs textarea { min-height:125px!important; }
+      .composer-actions { margin-top:auto; padding-top:20px; display:flex; flex-direction:column; align-items:stretch; flex-shrink:0; gap:10px; }
+      .generate-btn { width:100%; }
+      .result-panel { min-width:0; }
+      .result-stage { min-height:calc(100vh - 260px); }
+      .result-stage .media-result { max-height:calc(100vh - 280px); }
+      .connection { z-index:20; }
+    }
+    @media(min-width:901px) and (max-width:1150px) {
+      main { margin-left:175px!important; margin-right:320px!important; padding-left:18px!important; padding-right:18px!important; }
+      .side-panel { width:175px; padding:22px 10px; }
+      .sidebar-brand { font-size:17px; }
+      .composer { width:300px; right:10px; }
+    }
+
+    .connection { position:fixed; top:12px; right:16px; width:580px; height:36px; padding:3px 7px; display:flex; align-items:center; gap:8px; border-radius:8px; }
+    .connection-grid { flex:1; min-width:0; grid-template-columns:minmax(110px,1fr) minmax(90px,.8fr) auto; }
+    .connection input,.connection .primary-btn { height:26px; min-height:26px; font-size:10px; }
+    .connection-state { margin:0; white-space:nowrap; font-size:10px; gap:4px; }
+    .connection .state-dot { width:6px; height:6px; }
+    .model-tools { width:100%; display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+    #apiDocs { margin-left:auto; color:#6eb8ff; font-size:11px; text-decoration:none; }
+    #apiDocs:hover { text-decoration:underline; }
+    #workflowCount { width:100%; text-align:right; color:#828d93; font-size:10px; }
+    .rename-project { float:right; border:0; background:none; color:#849baf; font-size:11px; cursor:pointer; margin:5px 10px; }
+    .project-name { border-bottom:1px dashed #4b5358!important; }
+    .project-history { display:flex; flex-direction:column; gap:32px; overflow:visible; }
+    .timeline-work { width:100%; max-width:800px; margin:0 auto; padding:12px 0; }
+    .timeline-work small { color:#78838a; font-size:11px; }
+    .timeline-work p { font-size:14px; color:#d8dcdf; white-space:pre-wrap; }
+    .history-preview { min-height:220px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; gap:12px; color:#828a91; font-size:12px; }
+    .history-preview img,.history-preview video { display:block; max-width:100%; max-height:650px; border-radius:10px; object-fit:contain; }
+    .history-preview pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#1b1d1f; padding:20px; width:100%; border-radius:12px; }
+    .history-preview a { color:#a6e8df; font-size:12px; }
+    .load-older { display:block; margin:8px auto 24px; border:0; background:none; color:#82949e; cursor:pointer; }
+    .load-older[hidden] { display:none; }
+    .result-top { display:none; }
+    .result-stage[style*="display: none"] { min-height:0; }
+    @media(max-width:850px) { .connection { width:calc(100% - 205px); } }
+    @media(max-width:550px) { .connection { position:absolute; top:98px; width:calc(100% - 24px); right:12px; } }
+    .required-star { color:#ff5569; font-size:16px; font-weight:800; }
+    .field-help { display:block; font-size:10px; line-height:1.5; color:#899398; margin-top:5px; }
+    .project-row { display:flex; align-items:center; }
+    .project-row>button:first-child { flex:1; min-width:0; }
+    .project-more[hidden] { display:none!important; }
+    .project-row .project-more { width:30px; padding:8px 3px; flex-shrink:0; font-size:20px; }
+    .context-menu { position:fixed; z-index:100; background:#25292c; border:1px solid #4b5155; border-radius:10px; padding:6px; min-width:220px; box-shadow:0 10px 40px #0009; }
+    .context-menu[hidden] { display:none; }
+    .context-menu button { display:block; width:100%; text-align:left; background:none; border:0; color:#ddd; padding:10px; cursor:pointer; }
+    .context-menu button:hover { background:#3b4348; }
+    #modelDoc { width:min(800px,90vw); max-height:85vh; background:#1b1f22; color:#d7e3e7; border:1px solid #424b50; border-radius:16px; padding:24px; }
+    #modelDoc pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.8; }
+    #modelDoc::backdrop { background:#0009; }
   </style>
 </head>
 <body>
@@ -616,7 +783,7 @@
       <div>
         <div class="eyebrow">New user quick start</div>
         <h1 id="page-title">把 URL 和 Key<br>变成第一个<em>作品</em></h1>
-        <p class="intro-copy">这是随客户端安装的本地示例页。它不会上传或保存你的密钥，也不需要额外部署网站。启动灵境造片厂，复制 URL 和 API Key，连接后即可自动发现这台客户端可用的文字、图片和视频模型。</p>
+        <p class="intro-copy">这是随客户端安装的本地示例页。API Key 仅用于向你指定的客户端鉴权，无需额外部署网站。启动灵境造片厂，复制 URL 和 API Key，连接后显示全部工作流名称，选择后加载参数。局域网不可达时请改用互联网 HTTPS URL。</p>
       </div>
       <div class="quick-steps" aria-label="快速使用步骤">
         <div class="quick-step"><b>STEP 01</b><span>启动客户端并完成运行环境、模型检查</span></div>
@@ -625,31 +792,36 @@
       </div>
     </section>
 
-    <section class="connection" aria-label="连接客户端">
+    <section id="connectionPanel" class="connection" aria-label="连接客户端"><span id="connectionSummary" hidden>连接设置</span>
       <div class="connection-grid">
         <div class="field">
           <label for="baseUrl">客户端 URL <small>填写基础地址，不必带接口路径</small></label>
           <input id="baseUrl" type="url" spellcheck="false" placeholder="例如 http://127.0.0.1:18188" autocomplete="url">
         </div>
         <div class="field">
-          <label for="apiKey">API Key <small>仅保留在当前浏览器会话</small></label>
+          <label for="apiKey">API Key <small>记住此浏览器的连接设置</small></label>
           <div class="input-wrap">
             <input id="apiKey" type="password" spellcheck="false" placeholder="粘贴 Bearer API Key" autocomplete="off">
             <button class="key-toggle" id="keyToggle" type="button" aria-label="显示或隐藏 API Key">显示</button>
           </div>
         </div>
-        <button class="primary-btn" id="connectBtn" type="button">连接并检测模型</button>
+        <button class="primary-btn" id="connectBtn" type="button">连接</button>
       </div>
       <div class="connection-state" id="connectionState" role="status" aria-live="polite">
         <span class="state-dot"></span>
-        <span id="connectionText">等待连接客户端</span>
+        <span id="connectionText">未连接</span>
       </div>
     </section>
 
     <section class="workbench" aria-label="示例创作台">
       <aside class="side-panel">
-        <div class="panel-kicker">Creation category</div>
-        <div class="category-list" role="tablist" aria-label="生成分类">
+        <div class="sidebar-brand">灵境造片厂 <small>CREATIVE STUDIO</small></div>
+        <button id="createView" class="nav-item active" type="button">✦　创作</button>
+        <div class="project-heading"><span>我的项目</span><button id="newProject" type="button" aria-label="新建项目">＋</button></div>
+        <div id="projectList" class="project-list"></div>
+        <div class="sidebar-foot">记录保存在此浏览器<br>原文件保存在生成客户端</div>
+        <div class="panel-kicker" hidden>Creation category</div>
+        <div class="category-list" role="tablist" aria-label="生成分类" style="display:none">
           <button class="category-btn" data-category="text" type="button" role="tab" aria-selected="false">
             <span class="category-icon">文</span>
             <span><span class="category-name">文字生成</span><span class="category-caption">脚本 / 分镜 / 描述</span></span>
@@ -667,26 +839,13 @@
           </button>
         </div>
 
-        <div class="model-card">
-          <div class="field">
-            <label for="modelSelect">自动检测到的模型</label>
-            <select id="modelSelect" disabled>
-              <option value="">连接客户端后自动加载</option>
-            </select>
-          </div>
-          <div class="model-detail" id="modelDetail">
-            <strong>尚未检测</strong>
-            URL 和 Key 验证成功后，这里会显示客户端当前可用模型。
-          </div>
-        </div>
-
-        <div class="privacy-note">安全提示：本页是本地文件。URL 会保存在本机浏览器，API Key 只进入当前会话；关闭全部同源页面后会话数据失效。</div>
+        <div class="privacy-note">安全提示：本页是本地文件。URL 和 API Key 会记住在此浏览器，仅发送给你设置的客户端。</div>
       </aside>
 
       <div class="studio-panel">
         <div class="studio-head">
           <div>
-            <h2 id="studioTitle">图片生成</h2>
+            <input id="projectName" class="project-name" aria-label="项目名称，修改后自动保存" maxlength="60" value="默认项目"><h2 id="studioTitle">选择工作流开始创作</h2>
             <p id="studioSubtitle">输入画面描述，调用客户端可用的图片工作流。</p>
           </div>
           <div class="endpoint-chip" id="endpointChip">POST /api/v3/images/generations</div>
@@ -694,7 +853,23 @@
 
         <div class="studio-grid">
           <div class="composer">
-            <div class="prompt-label"><span id="promptLabel">画面描述</span><span id="charCount">0 / 4000</span></div>
+        <div class="model-card">
+          <div class="field">
+            <label for="modelSelect">全部工作流</label>
+            <select id="modelSelect" disabled>
+              <option value="">连接客户端后自动加载</option>
+            </select>
+          </div>
+          <div class="model-tools"><button class="ghost-btn" id="refreshWorkflows" type="button">刷新工作流</button><a id="apiDocs" href="#" target="_blank" rel="noopener noreferrer">接口文档 ↗</a><span id="workflowCount">未加载工作流</span></div>
+          <div class="model-detail" id="modelDetail">
+            <strong>尚未检测</strong>
+            URL 和 Key 验证成功后，这里会显示客户端当前可用模型。
+          </div>
+        </div>
+
+
+            <div id="dynamicInputs" aria-live="polite"></div>
+            <div class="prompt-label" hidden style="display:none"><span id="promptLabel">画面描述</span><span id="charCount">0 / 4000</span></div>
             <textarea id="prompt" maxlength="4000" placeholder="例如：清晨的江南水乡，一艘木船穿过薄雾，电影感光影，细腻写实"></textarea>
 
             <div class="category-controls control-group" id="imageControls">
@@ -758,13 +933,13 @@
             </div>
           </div>
 
-          <div class="result-panel">
+          <div class="result-panel"><button id="loadOlder" class="load-older" type="button" hidden>加载更早作品</button><div id="projectHistory" class="project-history"></div>
             <div class="result-top">
-              <span class="result-title">调用结果</span>
+              <span class="result-title">当前作品</span>
               <span class="result-status" id="resultStatus">等待请求</span>
             </div>
             <div class="result-stage" id="resultStage" aria-live="polite">
-              <div class="empty-result"><b>先连接客户端</b>检测到可用模型后，在左侧输入内容并开始第一次调用。</div>
+              <div class="empty-result"><span class="empty-mark">✦</span><b>让想法成为作品</b>在右上角连接客户端，选择工作流，开始这个项目的第一次创作。</div>
             </div>
             <div class="result-actions" id="resultActions"></div>
           </div>
@@ -778,6 +953,8 @@
     </footer>
   </main>
 
+  <div id="contextMenu" class="context-menu" hidden></div>
+  <dialog id="modelDoc"><button id="closeModelDoc" type="button">关闭</button><pre id="modelDocText"></pre></dialog>
   <div class="toast" id="toast" role="alert"></div>
 
   <script>
@@ -848,11 +1025,11 @@
       catch { throw new Error("URL 格式不正确，请复制客户端显示的完整地址"); }
       if (!/^https?:$/.test(parsed.protocol)) throw new Error("客户端 URL 必须以 http:// 或 https:// 开头");
       const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
-      if (parsed.protocol === "http:" && !loopbackHosts.has(parsed.hostname.toLowerCase())) {
+      if (parsed.protocol === "http:" && !loopbackHosts.has(parsed.hostname.toLowerCase()) && !isPrivateLanHost(parsed.hostname)) {
         throw new Error("远程客户端必须使用 https://，只有本机地址可以使用 http://");
       }
       let path = parsed.pathname.replace(/\/+$/, "");
-      const endpointPattern = /\/(?:v1\/models|v1\/chat\/completions|api\/v3\/images\/generations|v1\/workflows\/run(?:\/[^/]+)?|v1\/tasks(?:\/[^/]+)?)$/i;
+      const endpointPattern = /\/(?:v1\/models|v1\/chat\/completions|api\/v3\/images\/generations|v1\/workflows(?:\/run(?:\/[^/]+)?|\/[^/]+\/schema)?|v1\/tasks(?:\/[^/]+)?)$/i;
       path = path.replace(endpointPattern, "").replace(/\/+$/, "");
       return `${parsed.origin}${path}`;
     }
@@ -887,8 +1064,39 @@
       return payload;
     }
 
+    async function gatewayFetch(url, options = {}, timeoutMs = 15000) {
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : {abort(){},signal:undefined};
+      const offline = () => Object.assign(new Error("服务端离线或无法连接，请启动服务端并重新连接。"), {offline:true});
+      const bounded = async operation => {
+        let timer;
+        try {
+          return await Promise.race([Promise.resolve().then(operation), new Promise((_,reject)=>{
+            timer=setTimeout(()=>{controller.abort();reject(offline());},timeoutMs);
+          })]);
+        } catch(error) {
+          if(error instanceof TypeError || error.name === "AbortError") throw offline();
+          throw error;
+        } finally { clearTimeout(timer); }
+      };
+      const response = await bounded(()=>fetch(url,{...options,signal:controller.signal}));
+      if ([502,503,504,520,521,522,523,524,530].includes(response.status)) throw offline();
+      for(const name of ["text","blob"]) if(typeof response[name] === "function") {
+        const read = response[name].bind(response); response[name]=()=>bounded(read);
+      }
+      return response;
+    }
+    function markServerOffline(error) {
+      if(!error.offline) return;
+      const notify = state.connected;
+      state.connected=false;
+      elements.connectionState.className="connection-state error";
+      elements.connectionText.textContent="未连接";
+      elements.connectionState.title=error.message;
+      updateGenerateAvailability();
+      if(notify) showToast(error.message,true);
+    }
     async function apiRequest(pathOrUrl, options = {}) {
-      const response = await fetch(endpointUrl(pathOrUrl), {
+      const response = await gatewayFetch(endpointUrl(pathOrUrl), {
         ...options,
         redirect: "error",
         headers: authHeaders(options.headers || {})
@@ -932,13 +1140,23 @@
 
     function setConnection(kind, text) {
       elements.connectionState.className = `connection-state${kind ? ` ${kind}` : ""}`;
-      elements.connectionText.textContent = text;
+      elements.connectionText.textContent = kind === "ok" ? "已连接" : "未连接";
+      elements.connectionState.title = text;
+      $("workflowCount").textContent = kind === "ok" ? `发现 ${state.workflowList.length} 个工作流` : "未加载工作流";
+      if (kind === "ok") {
+        $("apiDocs").href = endpointUrl("/docs");
+      }
+      renderHistory();
+      $("connectionSummary").textContent = kind === "ok" ? "● 已连接 · URL / Key" : "连接设置 · URL / Key";
+      if (kind === "ok") $("connectionPanel").open = false;
     }
 
     function friendlyError(error) {
+      if (error?.offline) return error.message;
       if (error?.status === 401) return "连接失败：API Key 不正确，请重新从客户端复制。";
       if (error?.status === 403) return "连接失败：当前 Key 没有访问权限。";
       if (error?.status === 429) return "请求过于频繁，请稍等一分钟后重试。";
+      if (error instanceof TypeError && isPrivateLanHost(new URL(state.baseUrl).hostname)) return "局域网连接失败，请改用客户端提供的互联网 HTTPS URL，并确认公网连接在线。";
       if (error instanceof TypeError) return "无法访问客户端。请确认客户端已启动、URL 正确且公网连接在线。";
       return String(error?.message || "请求失败，请检查客户端状态");
     }
@@ -950,49 +1168,45 @@
       showToast.timer = setTimeout(() => { elements.toast.className = "toast"; }, 3600);
     }
 
-    async function connectClient() {
+    async function connectClient(options = {}) {
+      const silent = options.silent === true;
       if (state.busy) return;
+      invalidateConnection();
+      const epoch = state.connectionEpoch;
       try {
         state.baseUrl = normalizeBaseUrl(elements.baseUrl.value);
         state.apiKey = elements.apiKey.value.trim();
         if (!state.apiKey) throw new Error("请填写 API Key");
         state.busy = true;
-        elements.connectBtn.disabled = true;
-        elements.connectBtn.textContent = "正在检测...";
-        setConnection("busy", "正在验证 URL 和 Key，并读取模型列表...");
-
-        const { data } = await apiRequest("/v1/models", { method: "GET" });
-        state.models = normalizeModels(data);
-        ["text", "image", "video"].forEach(group => {
-          const ready = state.models[group].find(model => model.available);
-          state.selected[group] = ready?.id || "";
-          $(`${group}Count`).textContent = String(state.models[group].filter(model => model.available).length);
-        });
-        state.connected = true;
-        localStorage.setItem("lingjing_example_base_url", state.baseUrl);
-        sessionStorage.setItem("lingjing_example_api_key", state.apiKey);
-        elements.baseUrl.value = state.baseUrl;
-        const readyCount = Object.values(state.models).flat().filter(model => model.available).length;
-        setConnection("ok", `连接成功，检测到 ${readyCount} 个可用模型`);
-        renderCategory();
-        showToast("客户端连接成功，模型列表已更新");
-      } catch (error) {
-        state.connected = false;
-        state.models = { text: [], image: [], video: [] };
-        const message = friendlyError(error);
-        setConnection("error", message);
         updateGenerateAvailability();
-        showToast(message, true);
+        setConnection("busy", "正在读取工作流名称...");
+        const { data } = await apiRequest("/v1/workflows?summary=true&available_only=true", { method: "GET" });
+        if (epoch !== state.connectionEpoch) return;
+        if (!Array.isArray(data.workflows)) throw new Error("请升级客户端以支持工作流名称列表");
+        state.workflowList = data.workflows.filter(w => typeof w.id === "string" && typeof w.name === "string");
+        state.connected = true;
+        state.gatewayId = data.gateway_id || "";
+        sessionStorage.setItem("lingjing_example_api_key", state.apiKey);
+        try { localStorage.setItem("lingjing_connection", JSON.stringify({url:state.baseUrl, key:state.apiKey})); }
+        catch { showToast("浏览器不允许保存连接设置，本次连接仍可使用", true); }
+        elements.baseUrl.value = state.baseUrl;
+        renderModelSelect();
+        setConnection("ok", `已连接，发现 ${state.workflowList.length} 个工作流，请选择`);
+      } catch (error) {
+        if (epoch === state.connectionEpoch) {
+          state.connected = false;
+          const message = friendlyError(error);
+          setConnection("", silent ? "未连接" : message);
+          if (!silent) showToast(message, true);
+        }
       } finally {
         state.busy = false;
-        elements.connectBtn.disabled = false;
-        elements.connectBtn.textContent = "连接并检测模型";
         updateGenerateAvailability();
       }
     }
 
     function selectedModel() {
-      return state.models[state.category].find(model => model.id === state.selected[state.category]) || null;
+      return state.activeModel || null;
     }
 
     function modelRequiresInput(model, inputName) {
@@ -1019,49 +1233,22 @@
     }
 
     function renderCategory() {
-      const meta = CATEGORY_META[state.category];
-      document.querySelectorAll(".category-btn").forEach(button => {
-        const active = button.dataset.category === state.category;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-selected", String(active));
-      });
-      elements.studioTitle.textContent = meta.title;
-      elements.studioSubtitle.textContent = meta.subtitle;
-      elements.endpointChip.textContent = meta.endpoint;
-      elements.promptLabel.textContent = meta.label;
-      elements.prompt.placeholder = meta.placeholder;
-      elements.requestHint.textContent = meta.hint;
-      elements.generateBtn.textContent = meta.button;
-      ["text", "image", "video"].forEach(group => {
-        $(`${group}Controls`).hidden = group !== state.category;
-      });
+      const model = selectedModel();
+      elements.studioTitle.textContent = model?.name || "选择工作流";
+      elements.studioSubtitle.textContent = "选择后加载参数，重复选择使用当前页面缓存。";
+      elements.endpointChip.textContent = "POST /v1/workflows/run/{workflow_id}";
+      elements.prompt.hidden = true;
+      document.querySelector(".prompt-label").hidden = true;
+      ["text", "image", "video"].forEach(group => { $(`${group}Controls`).hidden = true; });
+      elements.generateBtn.textContent = "开始生成";
       renderModelSelect();
     }
 
     function renderModelSelect() {
-      const models = state.models[state.category];
-      elements.modelSelect.replaceChildren();
-      if (!state.connected) {
-        elements.modelSelect.add(new Option("连接客户端后自动加载", ""));
-        elements.modelSelect.disabled = true;
-      } else if (!models.length) {
-        elements.modelSelect.add(new Option(`未检测到${CATEGORY_META[state.category].title}模型`, ""));
-        elements.modelSelect.disabled = true;
-      } else {
-        models.forEach(model => {
-          const option = new Option(`${model.label}${model.available ? "" : " · 未就绪"}`, model.id);
-          option.disabled = !model.available;
-          elements.modelSelect.add(option);
-        });
-        const ready = models.find(model => model.available);
-        if (ready && !models.some(model => model.id === state.selected[state.category] && model.available)) {
-          state.selected[state.category] = ready.id;
-        }
-        elements.modelSelect.value = state.selected[state.category];
-        elements.modelSelect.disabled = !ready;
-      }
-      updateImageInputs();
-      updateVideoInputs();
+      const selected = elements.modelSelect.value;
+      elements.modelSelect.replaceChildren(new Option(state.connected ? "请选择工作流" : "连接后加载工作流", ""));
+      state.workflowList.forEach(workflow => elements.modelSelect.add(new Option(workflow.name, workflow.id)));
+      elements.modelSelect.value = selected;
       renderModelDetail();
       updateGenerateAvailability();
     }
@@ -1070,30 +1257,21 @@
       const model = selectedModel();
       elements.modelDetail.replaceChildren();
       const title = document.createElement("strong");
-      const body = document.createElement("span");
-      if (model) {
-        title.textContent = model.label;
-        const stateLabel = document.createElement("span");
-        stateLabel.className = model.available ? "model-ready" : "model-missing";
-        stateLabel.textContent = model.available ? "● 可以调用" : "● 环境或模型未就绪";
-        body.textContent = `\n${model.description || model.type || model.id}`;
-        elements.modelDetail.append(title, stateLabel, body);
-      } else {
-        title.textContent = state.connected ? "当前分类暂无可用模型" : "尚未检测";
-        body.textContent = state.connected
-          ? "请回到客户端安装对应环境与模型，再点击上方“连接并检测模型”刷新。"
-          : "URL 和 Key 验证成功后，这里会显示客户端当前可用模型。";
-        elements.modelDetail.append(title, body);
-      }
+      title.textContent = model?.name || "请选择工作流";
+      const text = document.createElement("span");
+      text.textContent = model
+        ? `${model.available ? "可以调用" : "暂不可用"} · ${model.id}\n${model.api_mapping_error || model.description || model.validation_status || ""}`
+        : "名称列表不加载参数，选择后按需获取。";
+      elements.modelDetail.append(title, text);
     }
 
     function updateGenerateAvailability() {
-      const model = selectedModel();
-      const missingRequiredFrame = state.category === "video" && (
-        (modelRequiresInput(model, "start_image") && !$("videoStartFrame").files?.[0])
-        || (modelRequiresInput(model, "end_image") && !$("videoEndFrame").files?.[0])
-      );
-      elements.generateBtn.disabled = state.busy || !state.connected || !model?.available || missingRequiredFrame;
+      elements.generateBtn.disabled = state.busy || !state.connected || !selectedModel()?.available;
+      elements.modelSelect.disabled = state.busy || !state.connected;
+      elements.baseUrl.disabled = state.busy;
+      elements.apiKey.disabled = state.busy;
+      elements.connectBtn.disabled = state.busy;
+      $("refreshWorkflows").disabled = state.busy;
     }
 
     function setResultStatus(text, kind = "") {
@@ -1111,10 +1289,12 @@
 
     function renderProgress(title, detail, percent = 12) {
       resetResultActions();
+      elements.resultStage.style.display = "";
       elements.resultStage.replaceChildren();
       const wrap = document.createElement("div");
       wrap.className = "task-progress";
       const heading = document.createElement("strong");
+      heading.id = "liveProgressTitle";
       heading.textContent = title;
       const track = document.createElement("div");
       track.className = "progress-track";
@@ -1131,6 +1311,8 @@
     }
 
     function updateProgress(percent, text) {
+      const title = $("liveProgressTitle");
+      if (title) title.textContent = "任务处理中";
       const bar = $("liveProgress");
       const copy = $("liveProgressText");
       if (bar) bar.style.width = `${Math.max(4, Math.min(100, Number(percent) || 0))}%`;
@@ -1175,11 +1357,49 @@
     }
 
     async function protectedMediaUrl(rawUrl) {
-      const response = await fetch(endpointUrl(rawUrl), { headers: authHeaders(), redirect: "error" });
+      const response = await gatewayFetch(endpointUrl(rawUrl), { headers: authHeaders(), redirect: "error" });
       if (!response.ok) await readResponse(response);
       const blob = await response.blob();
       state.mediaObjectUrl = URL.createObjectURL(blob);
       return state.mediaObjectUrl;
+    }
+
+    function artworkFilename(prompt, path = "", mime = "") {
+      const words = Array.from(String(prompt || "").normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "")).slice(0, 16).join("") || "作品";
+      const extensions = {"image/png":"png", "image/jpeg":"jpg", "image/webp":"webp", "video/mp4":"mp4", "video/webm":"webm"};
+      const suffix = extensions[mime.split(";")[0]] || String(path).split(/[?#]/)[0].match(/\.(png|jpe?g|webp|mp4|webm)$/i)?.[1] || "png";
+      return `灵境-${words}.${suffix}`;
+    }
+
+    let closeImageViewer = null;
+    function openImageViewer(source, title = "作品") {
+      closeImageViewer?.();
+      const previousFocus = document.activeElement;
+      const dialog = document.createElement("dialog");
+      dialog.setAttribute("aria-label", "原图预览");
+      dialog.style.cssText = "position:fixed;inset:0;margin:auto;width:96vw;height:94vh;max-width:96vw;max-height:94vh;padding:48px 12px 12px;border:1px solid #444;border-radius:16px;background:#111;color:#fff;overflow:auto;";
+      const close = document.createElement("button"); close.textContent = "关闭 ×";
+      close.style.cssText = "position:absolute;right:14px;top:10px;z-index:1;";
+      const image = document.createElement("img"); image.src = source; image.alt = title;
+      image.style.cssText = "display:block;margin:auto;max-width:100%;max-height:calc(94vh - 72px);object-fit:contain;cursor:zoom-in;";
+      let actualSize = false;
+      image.addEventListener("click", () => {
+        actualSize = !actualSize;
+        image.style.maxWidth = actualSize ? "none" : "100%";
+        image.style.maxHeight = actualSize ? "none" : "calc(94vh - 72px)";
+        image.style.cursor = actualSize ? "zoom-out" : "zoom-in";
+      });
+      closeImageViewer = () => { dialog.close(); dialog.remove(); closeImageViewer = null; previousFocus?.focus(); };
+      close.addEventListener("click", () => closeImageViewer?.());
+      dialog.addEventListener("cancel", event => { event.preventDefault(); closeImageViewer?.(); });
+      dialog.addEventListener("click", event => { if (event.target === dialog) closeImageViewer?.(); });
+      dialog.append(close, image); document.body.append(dialog); dialog.showModal(); close.focus();
+    }
+
+    function scrollToGeneration() {
+      const scroll = () => elements.resultStage.scrollIntoView({behavior:"smooth", block:"center"});
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(scroll);
+      else scroll();
     }
 
     async function renderMediaResult(rawUrl, category) {
@@ -1194,34 +1414,54 @@
         media.playsInline = true;
       } else {
         media.alt = "灵境造片厂生成图片";
+        media.style.cursor = "zoom-in";
+        media.addEventListener("click", () => openImageViewer(objectUrl, media.alt));
       }
       elements.resultStage.append(media);
       const download = document.createElement("a");
       download.className = "ghost-btn";
       download.href = objectUrl;
-      download.download = category === "video" ? "灵境造片厂生成视频" : "灵境造片厂生成图片";
+      download.download = artworkFilename(state.controls.find(c => c.field.name === "prompt")?.input.value, rawUrl);
       download.textContent = category === "video" ? "下载视频" : "下载图片";
       elements.resultActions.append(download);
     }
 
     async function pollTask(taskId, statusPath, category) {
       const path = statusPath || `/v1/tasks/${encodeURIComponent(taskId)}`;
+      let failures = 0, emptyResults = 0;
       for (let attempt = 0; attempt < 600; attempt += 1) {
         if (attempt) await new Promise(resolve => setTimeout(resolve, 3000));
-        const { data } = await apiRequest(path, { method: "GET" });
+        let data;
+        try {
+          ({ data } = await apiRequest(path, { method: "GET" }));
+          failures = 0;
+        } catch (error) {
+          if (error.offline) { markServerOffline(error); throw error; }
+          if ((!error.status || error.status >= 500) && ++failures <= 3) {
+            updateProgress(95, "连接暂时中断，正在重新读取任务状态...");
+            continue;
+          }
+          throw error;
+        }
         const status = String(data.status || "").toLowerCase();
         const percent = Number(data.progress?.percent ?? data.progress_percent ?? data.percent ?? Math.min(92, 14 + attempt * 3));
         if (["completed", "succeeded", "success"].includes(status)) {
           updateProgress(100, "任务完成，正在读取结果...");
           const mediaUrl = findMediaUrl(data);
           if (category === "text") {
-            renderTextResult(data.text || data.output?.text || "任务完成，但未返回文字内容");
+            const text = data.text || data.output?.text;
+            if (!text) {
+              if (++emptyResults <= 3) continue;
+              throw new Error("任务结束，但未返回文字结果，请检查 ComfyUI 执行记录");
+            }
+            renderTextResult(text);
           } else if (mediaUrl) {
-            await renderMediaResult(mediaUrl, category);
+            updateProgress(100, "生成完成，正在载入预览");
           } else {
+            if (++emptyResults <= 3) continue;
             throw new Error("任务已完成，但响应中没有找到生成文件 URL");
           }
-          return;
+          return data;
         }
         if (["failed", "error", "cancelled", "canceled"].includes(status)) {
           throw new Error(data?.error?.message || data?.error || data?.message || "客户端任务执行失败");
@@ -1300,40 +1540,60 @@
     }
 
     async function generate() {
-      if (state.busy) return;
       const model = selectedModel();
-      const prompt = elements.prompt.value.trim();
-      if (!state.connected || !model?.available) return showToast("请先连接客户端并选择可用模型", true);
-      if (!prompt) return showToast(`请填写${CATEGORY_META[state.category].label}`, true);
+      if (state.busy || !state.connected || !model?.available) return;
       state.busy = true;
+      let submittedTask = null, submittedBody = null;
+      setResultStatus("处理中", "");
       updateGenerateAvailability();
-      elements.generateBtn.textContent = "正在处理...";
-      setResultStatus("请求中", "busy");
-      renderProgress("任务已经开始", "正在向客户端提交请求...", 8);
-      const started = performance.now();
       try {
-        if (state.category === "text") await generateText(model, prompt);
-        else if (state.category === "image") await generateImage(model, prompt);
-        else await generateVideo(model, prompt);
-        const seconds = ((performance.now() - started) / 1000).toFixed(1);
-        setResultStatus(`完成 · ${seconds}s`, "ok");
+        const body = await collectDynamicInputs();
+        submittedBody = body;
+        renderProgress("正在提交任务", model.name, 8);
+        scrollToGeneration();
+        const { data } = await apiRequest(`/v1/workflows/run/${encodeURIComponent(model.id)}`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+        });
+        const taskId = data.task_id || data.id;
+        if (!taskId) throw new Error("客户端未返回任务 ID");
+        submittedTask = { taskId, statusPath: data.status_path };
+        const completed = await pollTask(taskId, data.status_path, model.output_type || "image");
+        saveArtwork(model, body, completed);
+        setResultStatus("完成", "ok");
       } catch (error) {
-        const message = friendlyError(error);
+        markServerOffline(error);
+        if (error.status === 401 || error.status === 403) invalidateConnection();
+        else if (error.status === 404 || String(error.message).includes("映射失效")) {
+          workflowCache.drop(model.id);
+          state.activeModel = null;
+        }
+        setResultStatus(error.offline ? "服务端离线" : "调用失败", "error");
+        elements.resultStage.style.display="";
         resetResultActions();
         elements.resultStage.replaceChildren();
-        const empty = document.createElement("div");
-        empty.className = "empty-result";
-        const title = document.createElement("b");
-        title.textContent = "调用没有完成";
-        const copy = document.createElement("span");
-        copy.textContent = message;
-        empty.append(title, copy);
-        elements.resultStage.append(empty);
-        setResultStatus("调用失败", "error");
-        showToast(message, true);
+        const message = document.createElement("pre");
+        message.className = "text-result";
+        message.textContent = friendlyError(error) + (submittedTask ? `\n任务：${submittedTask.taskId}\n可重新读取结果，无需再次生成。` : "");
+        elements.resultStage.append(message);
+        if (submittedTask) {
+          const retry = document.createElement("button");
+          retry.className = "ghost-btn";
+          retry.textContent = "重新读取结果";
+          retry.addEventListener("click", async () => {
+            if (state.busy) return;
+            state.busy = true; updateGenerateAvailability(); retry.disabled = true;
+            try {
+              const completed = await pollTask(submittedTask.taskId, submittedTask.statusPath, model.output_type || "image");
+              saveArtwork(model, submittedBody, completed);
+              setResultStatus("完成", "ok");
+            } catch (nextError) { markServerOffline(nextError); message.textContent = friendlyError(nextError); }
+            finally { state.busy = false; retry.disabled = false; updateGenerateAvailability(); }
+          });
+          elements.resultActions.append(retry);
+        }
+        showToast(friendlyError(error), true);
       } finally {
         state.busy = false;
-        elements.generateBtn.textContent = CATEGORY_META[state.category].button;
         updateGenerateAvailability();
       }
     }
@@ -1346,6 +1606,590 @@
       });
     });
 
+
+    function isPrivateLanHost(host) {
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+      const n = host.split(".").map(Number);
+      if (n.some(v => v > 255)) return false;
+      return n[0] === 10 || (n[0] === 172 && n[1] >= 16 && n[1] <= 31) || (n[0] === 192 && n[1] === 168);
+    }
+
+    function createWorkflowCache(load) {
+      const values = new Map(), pending = new Map();
+      let epoch = 0;
+      return {
+        get(id) {
+          if (values.has(id)) return Promise.resolve(values.get(id));
+          if (pending.has(id)) return pending.get(id);
+          const started = epoch;
+          const request = Promise.resolve().then(() => {
+            if (started !== epoch) throw new Error("连接已改变，取消旧参数请求");
+            return load(id);
+          }).then(detail => {
+            if (started !== epoch) throw new Error("连接已改变，忽略旧参数");
+            if (!detail || detail.id !== id) throw new Error("工作流参数 ID 不匹配");
+            values.set(id, detail);
+            return detail;
+          }).finally(() => { if (pending.get(id) === request) pending.delete(id); });
+          pending.set(id, request);
+          return request;
+        },
+        clear() { epoch += 1; values.clear(); pending.clear(); },
+        drop(id) { values.delete(id); }
+      };
+    }
+
+    state.workflowList = [];
+    state.connectionEpoch = 0;
+    state.selectionEpoch = 0;
+    state.activeModel = null;
+    state.controls = [];
+    const workflowCache = createWorkflowCache(async id => {
+      const { data } = await apiRequest(`/v1/workflows/${encodeURIComponent(id)}/schema`, { method: "GET" });
+      return data;
+    });
+
+    function invalidateConnection() {
+      state.connectionEpoch += 1;
+      state.selectionEpoch += 1;
+      state.connected = false;
+      state.activeModel = null;
+      state.workflowList = [];
+      workflowCache.clear();
+      $("dynamicInputs").replaceChildren();
+      state.controls = [];
+      renderModelSelect();
+    }
+
+    async function selectWorkflow() {
+      const id = elements.modelSelect.value;
+      const selection = ++state.selectionEpoch;
+      const connection = state.connectionEpoch;
+      state.activeModel = null;
+      state.controls = [];
+      $("dynamicInputs").replaceChildren();
+      updateGenerateAvailability();
+      if (!id || !state.connected) { renderModelDetail(); return; }
+      elements.modelDetail.textContent = "正在加载所选参数...";
+      try {
+        const detail = await workflowCache.get(id);
+        if (selection !== state.selectionEpoch || connection !== state.connectionEpoch) return;
+        state.activeModel = { ...detail, label: detail.name };
+        state.category = ["image", "video", "text"].includes(detail.output_type) ? detail.output_type : "image";
+        renderDynamicInputs(detail);
+        elements.requestHint.textContent = state.category === "text"
+          ? "提交文字任务后自动读取文字结果。"
+          : state.category === "video" ? "时长按工作流支持的秒数或帧数设置，提交后自动读取视频。"
+          : "分辨率和比例通过宽高设置；参考图模式按工作流处理图片尺寸。";
+        elements.studioTitle.textContent = detail.name;
+        renderModelDetail();
+      } catch (error) {
+        if (selection !== state.selectionEpoch || connection !== state.connectionEpoch) return;
+        state.activeModel = null;
+        state.controls = [];
+        $("dynamicInputs").replaceChildren();
+        if (error.status === 401 || error.status === 403) invalidateConnection();
+        elements.modelDetail.textContent = friendlyError(error);
+      } finally { updateGenerateAvailability(); }
+    }
+
+    function renderDynamicInputs(model) {
+      const container = $("dynamicInputs");
+      container.replaceChildren();
+      state.controls = [];
+      const declared = model.input_schema?.inputs;
+      if (!Array.isArray(declared)) throw new Error("参数描述无效，请在客户端手动填写参数");
+      let fields = declared.map(field => ({...field}));
+      const textChat = model.output_type === "text" && model.api_mapping_status === "legacy" && fields.some(f => f.name === "messages");
+      if (textChat) {
+        for (const field of fields) {
+          if (field.name === "prompt") { field.label = "用户提示词"; field.description = "这次需要模型完成的具体任务。"; }
+          if (field.name === "messages") { field.name = "system_prompt"; field.type = "text"; field.label = "系统提示词"; field.description = "可选：设定角色、语气和规则。将与用户提示词一起传给本地文字模型。"; }
+          if (field.name === "response_format") { field.label = "输出格式"; field.options = [{type:"text"},{type:"json_object"}]; field.optionLabels = ["普通文本（自然语言回答）","JSON 对象（第三方程序解析）"]; field.default = {type:"text"}; field.description="普通文本适合聊天；JSON 会要求模型返回一个 JSON 对象，但仍需调用方校验。"; }
+        }
+        fields.sort((a,b) => (a.name === "system_prompt" ? -1 : b.name === "system_prompt" ? 1 : 0));
+      }
+      // Older built-in schemas declare these supported parameters in optional
+      // but omit their controls. Never extend a custom mapping this way.
+      if (model.api_mapping_status === "legacy") {
+        const supported = new Set(model.input_schema.optional || []);
+        for (const [name, label, minimum, maximum] of [
+          ["width", "宽度（像素）", 64, 8192], ["height", "高度（像素）", 64, 8192],
+          ["steps", "采样步数", 1, 150], ["duration", "时长（秒）", 1, 120],
+          ["frames", "帧数", 1, 4096], ["fps", "帧率", 1, 120]
+        ]) {
+          if (supported.has(name) && !fields.some(field => field.name === name))
+            fields.push({name, label, type: "integer", required: false, minimum, maximum});
+        }
+      }
+      if (model.output_type === "video") {
+        const frameNames = new Set(["frames", "length", "frames_number", "num_frames", "frame_count"]);
+        const frameFields = fields.filter(field => frameNames.has(field.name));
+        if (frameFields.length && !fields.some(field => field.name === "duration")) {
+          const timing = model.input_schema.video_timing || {};
+          const fpsField = fields.find(field => ["fps", "frame_rate"].includes(field.name));
+          fields.push({name:"__video_duration", label:"时长（秒）", type:"number", minimum:0.1, step:0.1,
+            default:timing.duration, required:frameFields.some(field=>field.required),
+            _frameTargets:frameFields, _timing:timing, _fpsName:fpsField?.name || "fps"});
+        }
+        fields = fields.filter(field => !frameNames.has(field.name));
+        fields.forEach(field => {
+          if (field.name === "duration") {
+            field.label="时长（秒）";
+            if (model.api_mapping_status === "legacy") { field.type="integer"; field.step=1; }
+          }
+          if (["fps", "frame_rate"].includes(field.name)) field.label="帧率";
+        });
+      }
+      let leftRow = 1, rightRow = 2;
+      const imageRail = document.createElement("div"); imageRail.className = "reference-rail";
+      fields.forEach((field, index) => {
+        const required = field.required === true || (model.input_schema.required || []).includes(field.name);
+        const wrapper = document.createElement("div");
+        wrapper.className = ["prompt", "text"].includes(field.name) ? "field prompt-field" : "field";
+        wrapper.style.marginBottom = "16px";
+        const writing = ["text", "string", "object", "messages"].includes(field.type) && !field.options;
+        wrapper.style.gridColumn = writing || field.type === "image" ? "1" : "2";
+        wrapper.style.gridRow = String(writing ? leftRow++ : rightRow++);
+        const label = document.createElement("label");
+        label.textContent = field.label || field.name;
+        if (required) { const star = document.createElement("strong"); star.className="required-star"; star.textContent=" *"; label.append(star); }
+        label.htmlFor = `dynamic-${index}`;
+        let input;
+        if (field.type !== "image" && (Array.isArray(field.options) || field.type === "boolean")) {
+          input = document.createElement("select");
+          if (!required && field.default === undefined) input.add(new Option("保持工作流默认值", ""));
+          const options = field.options || [true, false];
+          options.forEach((value, i) => input.add(new Option(field.optionLabels?.[i] || String(value), JSON.stringify(value))));
+          if (field.default !== undefined) input.value = JSON.stringify(field.default);
+        } else if (["number", "integer", "image"].includes(field.type)) {
+          input = document.createElement("input");
+          input.type = field.type === "image" ? "file" : "number";
+          if (field.type === "image") input.accept = "image/png,image/jpeg,image/webp";
+          else {
+            input.step = field.step || (field.type === "integer" ? 1 : "any");
+            if (field.minimum !== undefined) input.min = field.minimum;
+            if (field.maximum !== undefined) input.max = field.maximum;
+            if (field.default !== undefined) input.value = String(field.default);
+          }
+        } else {
+          if (!["text", "string", "object", "messages"].includes(field.type)) throw new Error(`暂不支持参数类型 ${field.type}，请在客户端手动调整`);
+          input = document.createElement("textarea");
+          input.rows = 3;
+          input.style.minHeight = "72px";
+          input.value = field.default === undefined ? "" : typeof field.default === "string" ? field.default : JSON.stringify(field.default);
+        }
+        input.id = `dynamic-${index}`;
+        input.required = required;
+        input.addEventListener("input", () => { input.dataset.edited = "true"; });
+        wrapper.append(label, input);
+        if (field.description) { const help=document.createElement("small"); help.className="field-help"; help.textContent=field.description; wrapper.append(help); }
+        if (field.type === "image") {
+          wrapper.className = "reference-slot";
+          const tile = document.createElement("label"); tile.className = "reference-tile";
+          tile.htmlFor = input.id;
+          const plus = document.createElement("span"); plus.textContent = "+";
+          const preview = document.createElement("img"); preview.alt = field.label || "参考图片"; preview.hidden = true;
+          tile.append(plus, preview, input);
+          const remove = document.createElement("button"); remove.type = "button"; remove.className = "reference-remove";
+          remove.textContent = "×"; remove.title = "移除参考图"; remove.hidden = true;
+          input.addEventListener("change", async () => {
+            const file = input.files?.[0];
+            if (!file) { preview.hidden = true; plus.hidden = false; remove.hidden = true; return; }
+            try {
+              const data = await fileToDataUrl(file, field.label || field.name);
+              if (input.files?.[0] !== file) return;
+              preview.src = data; preview.hidden = false; plus.hidden = true; remove.hidden = false;
+            } catch (error) { input.value = ""; input.dispatchEvent(new Event("change")); showToast(error.message, true); }
+          });
+          remove.addEventListener("click", () => { input.value = ""; input.dispatchEvent(new Event("change")); });
+          wrapper.replaceChildren(tile, label, remove); imageRail.append(wrapper);
+        } else container.append(wrapper);
+        state.controls.push({ field, input, required, wrapper });
+      });
+      if (imageRail.children.length) {
+        imageRail.style.gridColumn = "1"; imageRail.style.gridRow = String(leftRow++); container.append(imageRail);
+      }
+      const width = state.controls.find(c => c.field.name === "width");
+      const height = state.controls.find(c => c.field.name === "height");
+      if (width && height) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "field";
+        const label = document.createElement("label");
+        label.textContent = "比例 / 分辨率";
+        wrapper.className = "field resolution-field";
+        wrapper.style.gridColumn = "2"; wrapper.style.gridRow = "1";
+        const select = document.createElement("select");
+        const defaultSize = width.field.default && height.field.default ? `${width.field.default}x${height.field.default}` : "";
+        select.add(new Option(defaultSize ? `工作流默认 · ${defaultSize.replace("x"," × ")}` : "自定义", defaultSize));
+        if(defaultSize) select.add(new Option("自定义", ""));
+        const referenceOption = new Option("参考图尺寸（自动等比）", "reference"); referenceOption.disabled = true; select.add(referenceOption);
+        select.value=defaultSize;
+        for (const [title, size] of [["768 × 768 · 1:1", "768x768"], ["1024 × 1024 · 1:1", "1024x1024"], ["1024 × 576 · 16:9", "1024x576"], ["576 × 1024 · 9:16", "576x1024"], ["1024 × 768 · 4:3", "1024x768"], ["768 × 1024 · 3:4", "768x1024"]]) {
+          select.add(new Option(title, size));
+        }
+        select.addEventListener("change", () => {
+          if (select.value === "reference") { void applyReferenceSize(); return; }
+          width.input.disabled = height.input.disabled = false;
+          const values = select.value ? select.value.split("x") : ["", ""];
+          width.input.value = values[0]; height.input.value = values[1];
+        });
+        for (const control of [width, height]) control.input.addEventListener("input", () => { select.value = ""; });
+        width.wrapper.hidden = true; height.wrapper.hidden = true;
+        width.input.setAttribute("aria-label", "宽度（像素）"); height.input.setAttribute("aria-label", "高度（像素）");
+        width.input.placeholder = "宽"; height.input.placeholder = "高";
+        const row = document.createElement("div"); row.className = "resolution-row";
+        const cross = document.createElement("span"); cross.textContent = "×";
+        row.append(select, width.input, cross, height.input);
+        wrapper.append(label, row); container.append(wrapper);
+        const imageControls = state.controls.filter(control=>control.field.type === "image");
+        const isFluxEdit = model.id === "flux2_klein_4b_v1";
+        async function applyReferenceSize() {
+          const file = imageControls.find(control=>control.input.files?.[0])?.input.files[0];
+          if(!file) return;
+          width.input.disabled = height.input.disabled = isFluxEdit;
+          if(typeof createImageBitmap === "undefined") return;
+          const bitmap = await createImageBitmap(file);
+          if(select.value !== "reference" || !imageControls.some(control=>control.input.files?.[0] === file)) {bitmap.close();return;}
+          const sizing = model.input_schema.reference_sizing;
+          const scale = sizing ? Math.sqrt(sizing.megapixels*1024*1024/(bitmap.width*bitmap.height)) : 1;
+          const step = sizing?.step || 1;
+          width.input.value=String(Math.round(bitmap.width*scale/step)*step);
+          height.input.value=String(Math.round(bitmap.height*scale/step)*step); bitmap.close();
+        }
+        for(const reference of imageControls) reference.input.addEventListener("change",()=>{
+          const hasImage=imageControls.some(control=>control.input.files?.length);
+          referenceOption.disabled=!hasImage;
+          if(hasImage && (isFluxEdit || select.value === "reference")) {select.value="reference";void applyReferenceSize().catch(error=>showToast(error.message,true));}
+          else if(!hasImage && select.value === "reference") {
+            select.value=defaultSize; width.input.value=String(width.field.default || ""); height.input.value=String(height.field.default || "");
+            width.input.disabled=height.input.disabled=false;
+          }
+          if(isFluxEdit) for(const option of Array.from(select.options || select.children)) option.disabled=option.value === "reference" ? !hasImage : hasImage;
+        });
+      }
+      const writingColumn = document.createElement("div"); writingColumn.className = "writing-column";
+      const settingsColumn = document.createElement("div"); settingsColumn.className = "settings-column";
+      const resolution = Array.from(container.children).find(child => child.className === "field resolution-field");
+      if (resolution) settingsColumn.append(resolution);
+      for (const control of state.controls) {
+        if (control.field.type === "image" || control.wrapper.hidden) continue;
+        (control.wrapper.style.gridColumn === "1" ? writingColumn : settingsColumn).append(control.wrapper);
+      }
+      if (imageRail.children.length) writingColumn.append(imageRail);
+      container.replaceChildren(writingColumn, settingsColumn);
+      if (!fields.length) container.textContent = "此工作流无需填写参数，可直接生成。";
+    }
+
+    async function collectDynamicInputs() {
+      const body = Object.create(null);
+      for (const { field, input, required } of state.controls) {
+        if (input.disabled) continue;
+        if (!input.checkValidity()) { input.reportValidity(); throw new Error(`请检查 ${field.label || field.name}`); }
+        if (field.type === "image") {
+          if (input.files?.[0]) body[field.name] = await fileToDataUrl(input.files[0], field.label || field.name);
+          continue;
+        }
+        const value = input.value;
+        if (!required && value === "" && (input.dataset.edited !== "true" || !["text", "string"].includes(field.type))) continue;
+        if (input.tagName === "SELECT" || ["object", "messages"].includes(field.type)) {
+          try { body[field.name] = JSON.parse(value); }
+          catch { throw new Error(`${field.label || field.name} 必须是有效 JSON`); }
+        } else if (["integer", "number"].includes(field.type)) body[field.name] = Number(value);
+        else body[field.name] = value;
+      }
+      if (body.system_prompt !== undefined) {
+        body.prompt = body.system_prompt.trim() ? `系统提示词：\n${body.system_prompt}\n\n用户提示词：\n${body.prompt || ""}` : body.prompt;
+        delete body.system_prompt;
+      }
+      const timingControl = state.controls.find(control => control.field._frameTargets);
+      if (timingControl) {
+        const field = timingControl.field;
+        const seconds = body[field.name];
+        delete body[field.name];
+        if (seconds !== undefined) {
+          const fps = body[field._fpsName] ?? field._timing.fps;
+          if (!(fps > 0) || !(seconds > 0)) throw new Error("请填写有效的时长和帧率");
+          for (const target of field._frameTargets) {
+            const step = field._timing.frame_step || target.step || 1;
+            const offset = field._timing.frame_offset ?? target.minimum ?? 0;
+            const raw = seconds * fps + (field._timing.inclusive_end || 0);
+            const frames = Math.max(target.minimum || 1, offset, Math.round((raw-offset)/step)*step+offset);
+            if (target.maximum !== undefined && frames > target.maximum) throw new Error("所选时长超过此工作流允许的帧数，请缩短时长");
+            body[target.name] = frames;
+          }
+        }
+      }
+      return body;
+    }
+
+    const PROJECT_STORAGE = "lingjing_studio_projects_v1";
+    let projects;
+    try { projects = JSON.parse(localStorage.getItem(PROJECT_STORAGE) || "null"); } catch { projects = null; }
+    if (!Array.isArray(projects) || !projects.length) projects = [{id:"default", name:"默认项目", works:[]}];
+    projects = projects.filter(p => p && typeof p.id === "string" && typeof p.name === "string" && Array.isArray(p.works));
+    if (!projects.length) projects = [{id:"default", name:"默认项目", works:[]}];
+    for (const project of projects) project.works = project.works.filter(w => w && typeof w === "object");
+    let activeProject = projects[0].id;
+    function persistProjects() {
+      try { localStorage.setItem(PROJECT_STORAGE, JSON.stringify(projects)); }
+      catch { showToast("浏览器存储已满，本次记录仅在当前页面保留，请下载作品", true); }
+    }
+    function deleteProject(projectId) {
+      if (state.busy) return showToast("请等待当前任务完成后删除项目", true);
+      if (projectId === "__unfiled__") return;
+      const index = projects.findIndex(project => project.id === projectId);
+      if (index < 0) return;
+      const project = projects[index];
+      let unfiled = projects.find(item => item.id === "__unfiled__");
+      if (!unfiled) { unfiled = {id:"__unfiled__", name:"未归档作品", works:[]}; projects.push(unfiled); }
+      // Remove the grouping only. Preserve all artwork metadata and original files.
+      unfiled.works.push(...project.works);
+      projects.splice(index, 1);
+      if (activeProject === projectId) {
+        activeProject = unfiled.id;
+        resetResultActions(); elements.resultStage.replaceChildren();
+      }
+      persistProjects(); renderProjects();
+      showToast("项目已删除，作品保留在未归档作品中");
+    }
+    function renderProjects() {
+      const list = $("projectList"); list.replaceChildren();
+      for (const project of projects) {
+        const button = document.createElement("button");
+        button.textContent = "▱  " + project.name;
+        button.className = project.id === activeProject ? "selected" : "";
+        button.addEventListener("click", () => {
+          if (state.busy) return showToast("请等待当前任务完成后切换项目", true);
+          activeProject = project.id; renderProjects();
+          resetResultActions(); elements.resultStage.replaceChildren();
+          setResultStatus("等待请求", "");
+        });
+        const row = document.createElement("div"); row.className = "project-row";
+        const more = document.createElement("button"); more.textContent = "⋯"; more.className = "project-more"; more.title = "项目菜单";
+        more.addEventListener("click", event => {
+          event.stopPropagation();
+          openContextMenu(event.clientX || 180, event.clientY || 160, [{label:"重命名", action:() => {
+            const editor = document.createElement("input"); editor.value = project.name; editor.maxLength = 60;
+            const save = () => { project.name = editor.value.trim() || project.name; persistProjects(); renderProjects(); };
+            editor.addEventListener("change", save);
+            editor.addEventListener("keydown", e => { if(e.key === "Enter") save(); if(e.key === "Escape") renderProjects(); });
+            row.replaceChildren(editor); editor.focus(); editor.select();
+          }}, {label:"删除项目（保留作品）", action:() => deleteProject(project.id)}]);
+        });
+        more.hidden = project.id === "__unfiled__";
+        row.append(button, more); list.append(row);
+      }
+      const project = projects.find(p => p.id === activeProject);
+      $("projectName").value = project.name;
+      $("projectName").readOnly = project.id === "__unfiled__";
+      renderHistory();
+    }
+    const HISTORY_BATCH = 6;
+    let previewQueue = [], previewActive = 0;
+    function queuePreview(target) { previewQueue.push(target); pumpPreviews(); }
+    function pumpPreviews() { while(previewActive < 2 && previewQueue.length) { const target=previewQueue.shift(); previewActive++; Promise.resolve(target.loadPreview?.()).finally(()=>{previewActive--;pumpPreviews();}); } }
+    let historyOffset = 0, historyEpoch = 0, historyUrls = [], historyObserver = null, olderObserver = null;
+    function orderedWorks() {
+      return [...projects.find(p => p.id === activeProject).works].sort((a,b) =>
+        (b.createdAt || Date.parse(b.date) || 0) - (a.createdAt || Date.parse(a.date) || 0));
+    }
+    function renderHistory() {
+      closeImageViewer?.();
+      historyEpoch++; historyOffset = 0; previewQueue = [];
+      historyObserver?.disconnect(); olderObserver?.disconnect();
+      for (const url of historyUrls) URL.revokeObjectURL(url);
+      historyUrls = []; $("projectHistory").replaceChildren();
+      if (typeof IntersectionObserver !== "undefined") {
+        historyObserver = new IntersectionObserver(entries => {
+          for (const entry of entries) if (entry.isIntersecting) {
+            historyObserver.unobserve(entry.target); queuePreview(entry.target);
+          }
+        }, {rootMargin:"120px"});
+      }
+      loadOlderHistory();
+      if (typeof IntersectionObserver !== "undefined") {
+        olderObserver = new IntersectionObserver(entries => {
+          if (entries.some(e => e.isIntersecting) && historyOffset < orderedWorks().length) loadOlderHistory(true);
+        });
+        olderObserver.observe($("loadOlder"));
+      }
+      const hasWorks = orderedWorks().length > 0;
+      if (!state.busy) elements.resultStage.style.display = hasWorks ? "none" : "";
+      if (hasWorks && typeof requestAnimationFrame !== "undefined") requestAnimationFrame(() => {
+        $("projectHistory").lastElementChild?.scrollIntoView({block:"end"});
+      });
+    }
+    function loadOlderHistory(preservePosition = false) {
+      const works = orderedWorks();
+      const batch = works.slice(historyOffset, historyOffset + HISTORY_BATCH).reverse();
+      historyOffset += batch.length;
+      const history = $("projectHistory"), previousHeight = history.scrollHeight;
+      const epoch = historyEpoch;
+      const cards = batch.map(work => {
+        const card = document.createElement("article"); card.className = "timeline-work";
+        const title = document.createElement("p"); title.textContent = work.prompt || work.model;
+        const info = document.createElement("small"); info.textContent = `${work.model} · ${work.date}`;
+        card.append(info, title);
+        const preview = document.createElement("div"); preview.className = "history-preview";
+        if (work.text) {
+          const pre = document.createElement("pre"); pre.textContent = work.text; preview.append(pre);
+        } else {
+          const note = document.createElement("span"); note.textContent = "等待加载图片";
+          const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "加载作品"; retry.className = "ghost-btn";
+          preview.append(note, retry);
+          let loading = false, loaded = false, originalOnly = false;
+          preview.manualOnly = false;
+          if (work.category === "video") note.textContent = "等待加载视频首帧";
+          preview.loadPreview = async (manual = false) => {
+            if (loading || loaded || epoch !== historyEpoch || (originalOnly && !manual)) return;
+            if (!state.connected || (work.gatewayId && state.gatewayId && work.gatewayId !== state.gatewayId)) { note.textContent = "请连接生成此作品的客户端"; return; }
+            loading = true; retry.disabled = true; note.textContent = "加载中…";
+            try {
+              const path = new URL(endpointUrl(work.path)).pathname;
+              const response = await gatewayFetch(endpointUrl(path + (originalOnly ? "" : "/preview")), {headers:authHeaders(), redirect:"error"});
+              if ([404,415].includes(response.status) && !originalOnly) {
+                originalOnly = true; preview.manualOnly = true;
+                note.textContent = "预览暂不可用，可点击加载原文件。";
+                retry.textContent = work.category === "video" ? "加载视频" : "加载原图";
+                return;
+              }
+              if (!response.ok) await readResponse(response);
+              const blob = await response.blob();
+              if (epoch !== historyEpoch) return;
+              const url = URL.createObjectURL(blob); historyUrls.push(url);
+              const media = document.createElement(work.category === "video" && originalOnly ? "video" : "img");
+              media.src = url; media.alt = work.prompt || "历史作品"; media.controls = true; media.loading = "lazy";
+              let originalPromise = originalOnly ? Promise.resolve(blob) : null;
+              const original = () => originalPromise ||= (async () => {
+                const response = await gatewayFetch(endpointUrl(work.path), {headers:authHeaders(),redirect:"error"});
+                if(!response.ok) await readResponse(response);
+                return response.blob();
+              })().catch(error=>{originalPromise=null;throw error;});
+              if (work.category === "video" && !originalOnly) {
+                const play = document.createElement("button"); play.type="button"; play.className="ghost-btn"; play.textContent="▶ 播放视频";
+                media.title="点击播放视频"; media.style.cursor="pointer";
+                const loadVideo = async () => {
+                  if(play.disabled) return;
+                  play.disabled=true; play.textContent="正在加载视频…";
+                  try {
+                    const full=await original(); if(epoch!==historyEpoch) return;
+                    const source=URL.createObjectURL(full); historyUrls.push(source);
+                    const video=document.createElement("video");video.controls=true;video.playsInline=true;video.poster=url;video.src=source;
+                    preview.replaceChildren(video,download);
+                    const started=video.play(); if(started?.catch) started.catch(()=>{});
+                  } catch(error) {markServerOffline(error);showToast(friendlyError(error),true);play.disabled=false;play.textContent="重试播放";}
+                };
+                play.addEventListener("click",loadVideo);media.addEventListener("click",loadVideo);
+                media.videoPlayButton=play;
+              }
+              const download = document.createElement("a"); download.href = "#"; download.download = artworkFilename(work.prompt, work.path); download.textContent = "下载原文件";
+              download.addEventListener("click", async event => {
+                event.preventDefault();
+                try { const full=await original(); const source=URL.createObjectURL(full); historyUrls.push(source);
+                  const link=document.createElement("a");link.href=source;link.download=artworkFilename(work.prompt,work.path,full.type);link.click();
+                } catch(error) {markServerOffline(error);showToast(friendlyError(error),true);}
+              });
+              if (work.category !== "video") { media.title="点击查看原图"; media.style.cursor="zoom-in";
+                media.addEventListener("click",async()=>{try{const full=await original();if(epoch!==historyEpoch)return;const source=URL.createObjectURL(full);historyUrls.push(source);openImageViewer(source,work.prompt || "作品");}catch(error){markServerOffline(error);showToast(friendlyError(error),true);}});
+              }
+              if (!work.gatewayId && state.gatewayId) {work.gatewayId=state.gatewayId; persistProjects();}
+              preview.replaceChildren(media, ...(media.videoPlayButton ? [media.videoPlayButton] : []), download); loaded = true;
+              if (work.category !== "video") media.addEventListener("contextmenu", event => {
+                event.preventDefault();
+                const actions = state.controls.filter(c => c.field.type === "image").map(control => ({label:`加入${control.field.label || control.field.name}`, action:async() => {
+                  if (state.busy) return showToast("请等待当前任务完成",true);
+                  const full = await original();
+                  const transfer = new DataTransfer(); transfer.items.add(new File([full],"reference",{type:full.type || "image/png"}));
+                  control.input.files=transfer.files; control.input.dispatchEvent(new Event("change"));
+                }}));
+                actions.push({label:"复制图片",action:async() => {
+                  const bitmap = await createImageBitmap(await original());
+                  const canvas=document.createElement("canvas"); canvas.width=bitmap.width; canvas.height=bitmap.height;
+                  canvas.getContext("2d").drawImage(bitmap,0,0); bitmap.close();
+                  const png=await new Promise(resolve=>canvas.toBlob(resolve,"image/png"));
+                  await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
+                }});
+                actions.push({label:"删除文件（本地原文件）",action:async() => {
+                  if (!state.connected || (work.gatewayId && state.gatewayId && work.gatewayId !== state.gatewayId)) throw new Error("请先连接生成此文件的客户端");
+                  await apiRequest(work.path,{method:"DELETE"});
+                  for(const project of projects) project.works=project.works.filter(item=>!(item.taskId===work.taskId && item.path===work.path));
+                  persistProjects(); renderHistory();
+                }});
+                openContextMenu(event.clientX,event.clientY,actions);
+              });
+            } catch (error) { if (epoch === historyEpoch) { markServerOffline(error); note.textContent = error.offline ? friendlyError(error) : "无法读取作品：" + friendlyError(error); } }
+            finally { loading = false; retry.disabled = false; }
+          };
+          retry.addEventListener("click", () => preview.loadPreview(true));
+          // Observe after the newest initial previews have been queued.
+        }
+        card.append(preview); return card;
+      });
+      history.replaceChildren(...cards, ...Array.from(history.children));
+      for (const [index, card] of [...cards].reverse().entries()) {
+        const preview = card.children[2];
+        if (preview?.loadPreview && !preview.manualOnly) {
+          if (!preservePosition && index < 3) queuePreview(preview);
+          else historyObserver?.observe(preview);
+        }
+      }
+      $("loadOlder").hidden = historyOffset >= works.length;
+      if (preservePosition && typeof window.scrollBy === "function") window.scrollBy(0, history.scrollHeight - previousHeight);
+    }
+    $("loadOlder").addEventListener("click", () => loadOlderHistory(true));
+    function saveArtwork(model, body, completed) {
+      const project = projects.find(p => p.id === activeProject);
+      if (project.works.some(w => w.taskId === completed.task_id)) return;
+      project.works.unshift({taskId:completed.task_id || completed.id, model:model.name, category:model.output_type,
+        prompt:String(body.prompt || "").slice(0,120), date:new Date().toLocaleString(), createdAt:Date.now(),
+        baseUrl:state.baseUrl, gatewayId:state.gatewayId || "", path:findMediaUrl(completed), text:String(completed.text || completed.output?.text || "").slice(0,50000)});
+      persistProjects(); renderProjects();
+      elements.resultStage.style.display = "none"; resetResultActions();
+    }
+    $("newProject").addEventListener("click", () => {
+      if (state.busy) return showToast("请等待当前任务完成", true);
+      const project = {id:String(Date.now()), name:`新项目 ${projects.length + 1}`, works:[]};
+      projects.unshift(project); activeProject = project.id; persistProjects(); renderProjects();
+      resetResultActions(); elements.resultStage.replaceChildren();
+      $("projectName").focus?.(); $("projectName").select?.();
+    });
+    $("projectName").addEventListener("change", () => {
+      projects.find(p => p.id === activeProject).name = $("projectName").value.trim().slice(0,60) || "未命名项目";
+      persistProjects(); renderProjects();
+    });
+    function openContextMenu(x,y,actions) {
+      const menu=$("contextMenu"); menu.replaceChildren(); menu.hidden=false;
+      menu.style.left=Math.max(8,Math.min(x,window.innerWidth-250))+"px";
+      menu.style.top=Math.max(8,Math.min(y,window.innerHeight-actions.length*38-20))+"px";
+      for(const item of actions) { const button=document.createElement("button"); button.textContent=item.label;
+        button.addEventListener("click",async()=>{menu.hidden=true;try{await item.action();}catch(error){markServerOffline(error);showToast(friendlyError(error),true);}}); menu.append(button); }
+    }
+    document.addEventListener?.("click",event=>{if(!$("contextMenu").contains(event.target)) $("contextMenu").hidden=true;});
+    $("apiDocs").addEventListener("click", event => {
+      event.preventDefault(); const model=selectedModel();
+      if(!model) return showToast("请先选择工作流",true);
+      const sample={};
+      for(const {field} of state.controls) {
+        if(field.name === "system_prompt") continue;
+        sample[field.name]=field.type === "image" ? "data:image/png;base64,<图片内容>" : field.default ?? (field.type === "integer" ? 768 : field.name === "prompt" ? "用户提示词" : "可选值");
+      }
+      const route=`/v1/workflows/run/${encodeURIComponent(model.id)}`;
+      $("modelDocText").textContent=`${model.name} 接入说明\n\n基础地址：${state.baseUrl}\n鉴权：Authorization: Bearer <你的 API Key>\n\n1. GET /v1/workflows/${encodeURIComponent(model.id)}/schema 获取此工作流的输入定义\n2. POST ${route}，Content-Type: application/json\n${JSON.stringify(sample,null,2)}\n\n字段说明：\n${state.controls.map(c=>`${c.field.name}：${c.field.label || c.field.name}，${c.field.type}，${c.required?'必填':'可选'}${c.field.description?'；'+c.field.description:''}`).join('\n')}\n\n系统提示词：页面将系统提示词与用户提示词合并为 prompt；接口也可以直接提交完整 prompt。\n3. 响应含 task_id；GET /v1/tasks/{task_id} 轮询，completed 为完成、failed 为失败。\n4. 文字结果读取 text；图片/视频读取 outputs 中的 download_path，并携带同一 Bearer Key 下载。\n5. DELETE /v1/files/{task_id}/{filename} 删除对应本地生成文件（需新版后端）。\n\nPython 示例：\nimport requests, time, json\nbase = ${JSON.stringify(state.baseUrl)}\nh = {"Authorization": "Bearer <你的 API Key>"}\nbody = json.loads(${JSON.stringify(JSON.stringify(sample))})\nr = requests.post(base + ${JSON.stringify(route)}, headers=h, json=body)\nr.raise_for_status()\ntask = r.json()["task_id"]\nwhile True:\n    r = requests.get(base + "/v1/tasks/" + task, headers=h)\n    r.raise_for_status()\n    result = r.json()\n    if result["status"] in ("completed", "failed"): break\n    time.sleep(3)\nprint(result)`;
+      $("modelDoc").showModal();
+    });
+    $("closeModelDoc").addEventListener("click",()=>$("modelDoc").close());
+    $("projectName").addEventListener("keydown", event => {
+      if (event.key === "Enter") { $("projectName").dispatchEvent(new Event("change")); $("projectName").blur(); }
+    });
+    $("createView").addEventListener("click", () => { document.querySelector(".composer").style.display = ""; });
+
+    $("refreshWorkflows").addEventListener("click", connectClient);
+    [elements.baseUrl, elements.apiKey].forEach(input => input.addEventListener("input", () => {
+      invalidateConnection();
+      setConnection("", "连接信息已修改，请重新连接");
+    }));
+
     elements.connectBtn.addEventListener("click", connectClient);
     elements.generateBtn.addEventListener("click", generate);
     elements.keyToggle.addEventListener("click", () => {
@@ -1353,13 +2197,7 @@
       elements.apiKey.type = reveal ? "text" : "password";
       elements.keyToggle.textContent = reveal ? "隐藏" : "显示";
     });
-    elements.modelSelect.addEventListener("change", () => {
-      state.selected[state.category] = elements.modelSelect.value;
-      updateImageInputs();
-      updateVideoInputs();
-      renderModelDetail();
-      updateGenerateAvailability();
-    });
+    elements.modelSelect.addEventListener("change", selectWorkflow);
     $("videoStartFrame").addEventListener("change", updateGenerateAvailability);
     $("videoEndFrame").addEventListener("change", updateGenerateAvailability);
     $("imageReference").addEventListener("change", updateGenerateAvailability);
@@ -1370,10 +2208,14 @@
       if (event.key === "Enter") connectClient();
     });
 
-    elements.baseUrl.value = localStorage.getItem("lingjing_example_base_url") || "http://127.0.0.1:18188";
-    elements.apiKey.value = sessionStorage.getItem("lingjing_example_api_key") || "";
-    window.LingJingExample = Object.freeze({ normalizeBaseUrl, normalizeModels, categoryForModel });
+    let savedConnection = {};
+    try { savedConnection = JSON.parse(localStorage.getItem("lingjing_connection") || "{}") || {}; } catch {}
+    elements.baseUrl.value = savedConnection.url || "http://127.0.0.1:18188";
+    elements.apiKey.value = savedConnection.key || sessionStorage.getItem("lingjing_example_api_key") || "";
+    window.LingJingExample = Object.freeze({ normalizeBaseUrl, normalizeModels, categoryForModel, isPrivateLanHost, createWorkflowCache });
     renderCategory();
+    renderProjects();
+    if (elements.apiKey.value.trim()) void connectClient({silent:true});
   </script>
 </body>
 </html>

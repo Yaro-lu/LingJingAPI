@@ -228,15 +228,24 @@ class BundledVideoWorkflowTests(unittest.TestCase):
         self.assertEqual(conditioning[0]["inputs"]["height"], 768)
         self.assertEqual(video[0]["inputs"]["fps"], 16)
 
-    def test_every_bundled_manifest_declares_a_known_model_group(self):
+    def test_every_bundled_manifest_declares_resolvable_model_dependencies(self):
         manifests = sorted(WORKFLOWS_DIR.glob("*/manifest.json"))
         self.assertTrue(manifests)
         for path in manifests:
             with self.subTest(manifest=path.parent.name):
                 manifest = _read_json(path)
                 model_group = str(manifest.get("model_group") or "").strip()
-                self.assertTrue(model_group, f"{path} 缺少 model_group")
-                self.assertIn(model_group, MODEL_REQUIREMENTS)
+                if model_group:
+                    self.assertIn(model_group, MODEL_REQUIREMENTS)
+                else:
+                    # Imported workflows resolve model files from graph metadata.
+                    from app.core.workflow_adaptation import graph_hash
+                    graph = _read_json(path.parent / "workflow.json")
+                    models = manifest.get("dependencies", {}).get("models", [])
+                    self.assertTrue(models, f"{path} 缺少模型依赖")
+                    self.assertEqual({item["name"] for item in models}, _model_filenames(graph))
+                    self.assertEqual(manifest.get("api_mapping_status"), "ready")
+                    self.assertEqual(manifest.get("api_graph_hash"), graph_hash(graph))
 
 
 if __name__ == "__main__":

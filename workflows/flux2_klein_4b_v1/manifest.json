@@ -13,12 +13,59 @@
   },
   "input_schema": {
     "summary": "只输入提示词时文生图；同时提供 image 时按参考图编辑。",
-    "required": ["prompt"],
-    "optional": ["image", "width", "height", "steps", "seed"],
+    "required": [
+      "prompt"
+    ],
+    "optional": [
+      "image",
+      "width",
+      "height",
+      "steps",
+      "seed"
+    ],
     "inputs": [
-      {"name": "prompt", "type": "text", "label": "提示词", "required": true},
-      {"name": "image", "type": "image", "label": "参考图片", "required": false},
-      {"name": "seed", "type": "integer", "label": "随机种子", "required": false}
+      {
+        "name": "prompt",
+        "type": "text",
+        "label": "提示词",
+        "required": true
+      },
+      {
+        "name": "image",
+        "type": "image",
+        "label": "参考图片",
+        "required": false
+      },
+      {
+        "name": "seed",
+        "type": "integer",
+        "label": "随机种子",
+        "required": false
+      },
+      {
+        "name": "width",
+        "label": "宽度（像素，仅文生图）",
+        "type": "integer",
+        "required": false,
+        "minimum": 64,
+        "maximum": 4096
+      },
+      {
+        "name": "height",
+        "label": "高度（像素，仅文生图）",
+        "type": "integer",
+        "required": false,
+        "minimum": 64,
+        "maximum": 4096
+      },
+      {
+        "name": "steps",
+        "label": "采样步数",
+        "type": "integer",
+        "required": false,
+        "minimum": 1,
+        "maximum": 150
+      }
     ]
   }
 }

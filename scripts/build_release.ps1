@@ -141,6 +141,9 @@ function Test-ExcludedRelativePath {
             return $true
         }
         $portablePackage = $normal.ToLowerInvariant()
+        if ($portablePackage -match '^lib\\site-packages\\comfy[^\\]*(?:\\|$)') {
+            return $true
+        }
         if ($portablePackage -match '^lib\\site-packages\\(?:diffusers|pip|setuptools|_distutils_hack)(?:[-.\\]|$)') {
             return $true
         }
@@ -371,6 +374,7 @@ function Assert-StagingPolicy {
         '(^|/)git\.exe$',
         '^app/updater_runtime/(?!pip(?:/|$)|pip-license\.txt$)',
         '^runtime/python/lib/site-packages/(?:diffusers|pip|setuptools|_distutils_hack)(?:[-./]|$)',
+        '^runtime/python/lib/site-packages/comfy[^/]*(?:/|$)',
         '^\.venv/share(/|$)',
         '^\.venv/lib/site-packages/(?:torch|torchaudio|torchvision|triton|nvidia)(?:[-./]|$)',
         '^bin/cloudflared\.exe$',
@@ -515,6 +519,7 @@ try {
         'start.bat',
         'check-env.bat',
         'README.md',
+        'README_EN.md',
         'LICENSE',
         'THIRD_PARTY_NOTICES.md',
         '开源许可说明.txt',
@@ -581,6 +586,11 @@ try {
     Copy-RequiredFile `
         -Source (Join-Path $SourceRoot 'examples\灵境造片厂示例页.html') `
         -Destination (Join-Path $StageRoot '灵境造片厂示例页.html')
+    foreach ($screenshot in @('console.png', 'workflow-models.png', 'studio.png')) {
+        Copy-RequiredFile `
+            -Source (Join-Path $SourceRoot "docs\images\2.0\$screenshot") `
+            -Destination (Join-Path $StageRoot "docs\images\2.0\$screenshot")
+    }
 
     $releaseInfo = [ordered]@{
         product = 'LingJingAI'

@@ -27,12 +27,11 @@ class LocalExamplePageContractTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, page)
 
-    def test_page_discovers_models_and_uses_existing_client_endpoints(self):
+    def test_page_discovers_names_then_loads_selected_schema_and_uses_existing_tasks(self):
         page = self.page()
         for marker in (
-            "/v1/models",
-            "/v1/chat/completions",
-            "/api/v3/images/generations",
+            "/v1/workflows?summary=true&available_only=true",
+            "/schema",
             "/v1/workflows/run/",
             "/v1/tasks/",
             "Authorization",
@@ -56,13 +55,10 @@ class LocalExamplePageContractTests(unittest.TestCase):
         self.assertNotIn("fonts.googleapis.com", page)
         self.assertNotIn("cdn.jsdelivr.net", page)
 
-    def test_page_does_not_persist_api_key_to_local_storage(self):
+    def test_page_remembers_connection_as_requested(self):
         page = self.page()
-        self.assertIn("sessionStorage", page)
-        self.assertNotRegex(
-            page,
-            r"localStorage\.setItem\([^\n]*(?:api.?key|token)",
-        )
+        self.assertIn('localStorage.getItem("lingjing_connection")', page)
+        self.assertIn('JSON.stringify({url:state.baseUrl, key:state.apiKey})', page)
 
     def test_video_flow_requires_and_submits_first_and_last_frame_files(self):
         page = self.page()

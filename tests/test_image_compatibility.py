@@ -326,6 +326,11 @@ class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             set_offline=lambda: None,
         )
         self.fake_config = SimpleNamespace(
+            base_dir=self.base,
+            models_dir=self.base / "models",
+            outputs_dir=self.base / "outputs",
+            directory=lambda name: self.base / "runtime" / "logs" if name == "logs" else self.base / name,
+            workflows_dir=self.base / "workflows",
             requests_dir=self.base / "runtime" / "requests",
             logs_dir=self.base / "runtime" / "logs",
             runtime_dir=self.base / "runtime",
@@ -881,6 +886,34 @@ class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("data", payload)
         release_timer.cancel()
 
+    async def test_completion_waits_until_outputs_are_ready(self):
+        entered, release = threading.Event(), threading.Event()
+        original = FakeComfyUIClient.get_history
+        def slow_history(client, prompt_id):
+            entered.set()
+            release.wait(timeout=3)
+            return original(client, prompt_id)
+        with mock.patch.object(FakeComfyUIClient, "get_history", slow_history):
+            try:
+                status, _, body = await asgi_request(self.app, "POST", "/v1/workflows/run/flux_t2i_v1",
+                                                   headers=self.auth, json_body=self._image_body())
+                self.assertEqual(status, 200)
+                task_id = json.loads(body)["task_id"]
+                FakeComfyUIClient.release.set()
+                self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                _, _, response = await asgi_request(self.app, "GET", f"/v1/tasks/{task_id}", headers=self.auth)
+                self.assertEqual(json.loads(response)["status"], "running")
+            finally:
+                release.set()
+            for _ in range(100):
+                _, _, response = await asgi_request(self.app, "GET", f"/v1/tasks/{task_id}", headers=self.auth)
+                record = json.loads(response)
+                if record["status"] == "completed":
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(record["status"], "completed")
+            self.assertTrue(record["outputs"])
+
     async def test_completed_task_has_ark_data_and_relative_download_path(self):
         record = {
             "id": "task_done",
@@ -958,6 +991,78 @@ class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(auth_status, 200)
         self.assertEqual(auth_headers["content-type"], "image/png")
         self.assertEqual(auth_body, PNG_BYTES)
+
+    async def test_delete_only_registered_completed_media(self):
+        output = self.base / "outputs" / "delete-me.png"
+        output.write_bytes(PNG_BYTES)
+        unrelated = self.base / "outputs" / "keep.png"
+        unrelated.write_bytes(PNG_BYTES)
+        with server._task_lock:
+            server.task_records["deletion"] = {"task_id":"deletion", "status":"completed",
+                                               "outputs":[{"filename":output.name}]}
+        status, _, _ = await asgi_request(self.app, "DELETE", "/v1/files/deletion/delete-me.png")
+        self.assertEqual(status,401)
+        self.assertTrue(output.exists())
+        status, _, _ = await asgi_request(self.app, "DELETE", "/v1/files/deletion/keep.png", headers=self.auth)
+        self.assertEqual(status,404)
+        self.assertTrue(unrelated.exists())
+        status, _, body = await asgi_request(self.app, "DELETE", "/v1/files/deletion/delete-me.png", headers=self.auth)
+        self.assertEqual(status,200)
+        self.assertTrue(json.loads(body)["deleted"])
+        self.assertFalse(output.exists())
+        self.assertTrue(unrelated.exists())
+
+    async def test_video_preview_requires_auth_and_keeps_original_private(self):
+        from PIL import Image
+        output = self.base / "outputs" / "movie.mp4"
+        output.write_bytes(b"video fixture")
+        server._set_task_record("video_preview", {"task_id":"video_preview", "status":"completed", "outputs":[{"filename":output.name}]})
+        path = "/v1/files/video_preview/movie.mp4/preview"
+        with mock.patch("app.core.single_user_assets._video_first_frame", return_value=Image.new("RGB", (800, 480), "red")) as decode:
+            status, _, _ = await asgi_request(self.app, "GET", path)
+            self.assertEqual(status, 401)
+            decode.assert_not_called()
+            status, headers, body = await asgi_request(self.app, "GET", path, headers=self.auth)
+            self.assertEqual(status, 200)
+            self.assertIn("image/webp", headers["content-type"])
+            self.assertNotEqual(body, output.read_bytes())
+            decode.assert_called_once()
+
+    async def test_archived_result_survives_memory_reset_and_preview_is_smaller(self):
+        from PIL import Image
+        from io import BytesIO
+        output = self.base / "outputs" / "large.png"
+        Image.new("RGB", (1536, 1024), "orange").save(output)
+        original = output.read_bytes()
+        server._set_task_record("archived", {"task_id":"archived", "status":"completed", "outputs":[{"filename":output.name}]})
+        with server._task_lock:
+            server.task_records.pop("archived")
+        status, _, body = await asgi_request(self.app, "GET", "/v1/tasks/archived", headers=self.auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["outputs"][0]["filename"], output.name)
+        status, _, _ = await asgi_request(self.app, "GET", "/v1/files/archived/large.png/preview")
+        self.assertEqual(status, 401)
+        status, headers, body = await asgi_request(self.app, "GET", "/v1/files/archived/large.png/preview", headers=self.auth)
+        self.assertEqual(status, 200)
+        self.assertIn("image/webp", headers["content-type"])
+        with Image.open(BytesIO(body)) as thumbnail:
+            self.assertEqual(max(thumbnail.size), 640)
+        self.assertEqual(output.read_bytes(), original)
+        status, _, _ = await asgi_request(self.app, "DELETE", "/v1/files/archived/large.png", headers=self.auth)
+        self.assertEqual(status, 200)
+        status, _, _ = await asgi_request(self.app, "GET", "/v1/files/archived/large.png/preview", headers=self.auth)
+        self.assertEqual(status, 404)
+
+    async def test_flux_defaults_are_read_from_executable_graph(self):
+        from app.workflow_registry import WorkflowDef
+        root = Path(__file__).resolve().parents[1] / "workflows"
+        folder = root / "flux2_klein_4b_v1"
+        workflow = WorkflowDef.from_manifest(folder, json.loads((folder / "manifest.json").read_text(encoding="utf-8")))
+        workflow._workflows_dir = root
+        schema = server._workflow_payload(workflow)["input_schema"]
+        defaults = {field["name"]:field.get("default") for field in schema["inputs"]}
+        self.assertEqual((defaults["width"], defaults["height"]), (768,768))
+        self.assertEqual(schema["reference_sizing"]["megapixels"], 0.6)
 
     async def test_output_path_guard_rejects_sibling_prefix(self):
         outputs = (self.base / "outputs").resolve()

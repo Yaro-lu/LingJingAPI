@@ -163,6 +163,16 @@ class ComfyUIClient:
         # 不在队列了 — 检查是否已完成
         history = self.get_history(prompt_id)
         if prompt_id in history:
+            status = history[prompt_id].get("status", {})
+            if status.get("status_str") == "error":
+                messages = status.get("messages", [])
+                detail = next((item[1] for item in reversed(messages)
+                               if isinstance(item, (list, tuple)) and len(item) > 1
+                               and item[0] in ("execution_error", "execution_interrupted")
+                               and isinstance(item[1], dict)), {})
+                reason = str(detail.get("exception_message") or "任务被中断").strip()
+                return {"status": "failed", "value": 0, "max": 1,
+                        "error": f"ComfyUI 节点 {detail.get('node_type', '')} 执行失败：{reason[:500]}"}
             return self._with_progress_high_water(prompt_id, {
                 "value": 1,
                 "max": 1,

@@ -280,7 +280,8 @@ MODEL_REQUIREMENTS = {
 def model_file_ready(path: Path, expected_size: int | None = None) -> bool:
     """Return whether a model file exists and matches its known byte size."""
     try:
-        path = Path(path)
+        from app.core.model_mappings import resolve_model_file
+        path = resolve_model_file(path)
         if not path.is_file():
             return False
         size = path.stat().st_size
@@ -302,7 +303,8 @@ def model_file_sha256_matches(
         return False
     digest = hashlib.sha256()
     try:
-        with Path(path).open("rb") as handle:
+        from app.core.model_mappings import resolve_model_file
+        with resolve_model_file(path).open("rb") as handle:
             for chunk in iter(lambda: handle.read(chunk_size), b""):
                 digest.update(chunk)
     except OSError:

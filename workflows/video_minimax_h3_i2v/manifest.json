@@ -1,0 +1,177 @@
+{
+  "api_mapping_status": "ready",
+  "api_graph_hash": "709d4dc49c00fe1816f5554477db8c69a5e0ac8fc9287b510188553c4151cc7e",
+  "api_mapping_error": "",
+  "api_bindings": {
+    "image": [
+      {
+        "node_id": "114",
+        "input": "image"
+      }
+    ],
+    "denoise": [
+      {
+        "node_id": "105:9",
+        "input": "denoise"
+      }
+    ],
+    "noise_seed": [
+      {
+        "node_id": "105:15",
+        "input": "noise_seed"
+      }
+    ],
+    "fps": [
+      {
+        "node_id": "105:91",
+        "input": "fps"
+      }
+    ],
+    "prompt": [
+      {
+        "node_id": "105:104",
+        "input": "prompt"
+      }
+    ],
+    "duration": [
+      {
+        "node_id": "105:111",
+        "input": "value"
+      }
+    ]
+  },
+  "input_schema": {
+    "inputs": [
+      {
+        "name": "image",
+        "type": "image",
+        "label": "首帧图片",
+        "required": true
+      },
+      {
+        "name": "denoise",
+        "type": "number",
+        "label": "降噪强度",
+        "required": false,
+        "default": 1,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "step": 0.01
+      },
+      {
+        "name": "noise_seed",
+        "type": "integer",
+        "label": "随机种子",
+        "required": false,
+        "default": 757358688076805,
+        "minimum": -1,
+        "maximum": 18446744073709551615
+      },
+      {
+        "name": "fps",
+        "type": "integer",
+        "label": "帧率",
+        "required": false,
+        "default": 24,
+        "minimum": 1.0,
+        "maximum": 120.0,
+        "step": 1.0
+      },
+      {
+        "name": "prompt",
+        "type": "text",
+        "label": "提示词",
+        "required": false
+      },
+      {
+        "name": "duration",
+        "type": "number",
+        "label": "时长（秒）",
+        "required": false,
+        "default": 5,
+        "minimum": 0.1,
+        "step": 0.1
+      }
+    ],
+    "required": [
+      "image"
+    ],
+    "optional": [
+      "denoise",
+      "noise_seed",
+      "fps",
+      "prompt",
+      "duration"
+    ],
+    "response": {
+      "type": "video"
+    }
+  },
+  "output_type": "video",
+  "id": "video_minimax_h3_i2v",
+  "name": "video_minimax_h3_i2v",
+  "type": "video.image_to_video",
+  "engine": "comfyui",
+  "enabled": true,
+  "version": "1.0.0",
+  "description": "上传首帧图片并填写提示词，按所选时长和帧率生成视频；帧数按工作流规则自动对齐。",
+  "dependencies": {
+    "models": [
+      {
+        "name": "minimax_h3_video_vae_fp16.safetensors",
+        "source": "minimax_h3_video_vae_fp16.safetensors",
+        "input": "vae_name",
+        "node": "VAELoader"
+      },
+      {
+        "name": "minimax_h3_audio_vae_fp32.safetensors",
+        "source": "minimax_h3_audio_vae_fp32.safetensors",
+        "input": "vae_name",
+        "node": "VAELoader"
+      },
+      {
+        "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "source": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "input": "unet_name",
+        "node": "UNETLoader"
+      },
+      {
+        "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "source": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "input": "clip_name",
+        "node": "CLIPLoader"
+      },
+      {
+        "name": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        "source": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        "input": "lora_name",
+        "node": "LoraLoaderModelOnly"
+      }
+    ],
+    "nodes": [
+      "SaveVideo",
+      "LoadImage",
+      "ResolutionSelector",
+      "ImageScaleToTotalPixels",
+      "GetImageSize",
+      "VAELoader",
+      "VAEDecodeAudio",
+      "VAEDecode",
+      "KSamplerSelect",
+      "BasicScheduler",
+      "SamplerCustomAdvanced",
+      "BasicGuider",
+      "UNETLoader",
+      "CLIPLoader",
+      "RandomNoise",
+      "CreateVideo",
+      "MiniMaxH3ImageToVideo",
+      "ComfyMathExpression",
+      "PrimitiveFloat",
+      "LoraLoaderModelOnly",
+      "ComfySwitchNode",
+      "PrimitiveInt",
+      "PrimitiveBoolean"
+    ]
+  }
+}

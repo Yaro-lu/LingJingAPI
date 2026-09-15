@@ -65,6 +65,65 @@ class TextConfigTests(unittest.TestCase):
             self.assertEqual(config.get("comfyui.vram_mode"), "high")
             self.assertTrue((runtime / "config.local.txt").is_file())
 
+    def test_directory_mappings_persist_and_support_chinese_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "客户端"
+            target = Path(tmp) / "外部资源" / "模型目录"
+            target.mkdir(parents=True)
+            config = Config(base)
+
+            saved = config.set_directory_mapping("models", target)
+
+            self.assertEqual(saved, target.resolve())
+            loaded = Config(base)
+            self.assertEqual(loaded.models_dir, target.resolve())
+            content = (base / "runtime" / "config.local.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("[directories]", content)
+            self.assertIn(f"models = {target.resolve()}", content)
+
+    def test_parent_storage_directory_adapts_only_requested_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "client"
+            root = Path(tmp) / "外部资源"
+            for name in ("models", "workflows", "outputs"):
+                (root / name).mkdir(parents=True)
+            image = root / "outputs" / "keep.png"
+            image.write_bytes(b"original")
+            config = Config(base)
+            for name in ("models", "workflows", "outputs"):
+                self.assertEqual(config.set_directory_mapping(name, root), (root / name).resolve())
+            self.assertEqual(image.read_bytes(), b"original")
+            nested = root / "other" / "ComfyUI" / "models"
+            nested.mkdir(parents=True)
+            self.assertEqual(config.set_directory_mapping("models", root / "other"), nested.resolve())
+            self.assertEqual(config.outputs_dir, (root / "outputs").resolve())
+
+    def test_missing_mapped_directory_is_cleared_and_falls_back_to_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "client"
+            target = Path(tmp) / "external-outputs"
+            target.mkdir()
+            config = Config(base)
+            config.set_directory_mapping("outputs", target)
+            target.rmdir()
+
+            loaded = Config(base)
+
+            self.assertEqual(loaded.outputs_dir, (base / "outputs").resolve())
+            self.assertEqual(loaded.get("directories.outputs"), "")
+            reloaded = Config(base)
+            self.assertEqual(reloaded.get("directories.outputs"), "")
+
+    def test_directory_mapping_rejects_a_missing_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "client"
+            config = Config(base)
+
+            with self.assertRaises(ValueError):
+                config.set_directory_mapping("logs", Path(tmp) / "missing")
+
 
 if __name__ == "__main__":
     unittest.main()
