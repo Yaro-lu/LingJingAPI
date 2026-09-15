@@ -59,6 +59,7 @@ from app.core.runtime_package import (  # noqa: E402
     REQUIRED_RUNTIME_PATHS,
     RUNTIME_PACKAGE_NAME,
     RUNTIME_PACKAGE_SIZE,
+    RUNTIME_PACKAGE_SHA256,
     SevenZipProgressParser,
     archive_extract_command,
     archive_list_command,
@@ -71,6 +72,7 @@ from app.core.runtime_package import (  # noqa: E402
     verify_runtime_package,
     resolve_runtime_download_url,
 )
+from app.core.runtime_download import download_runtime_package
 from app.core.runtime_update import (  # noqa: E402
     consume_runtime_update_result,
     launch_runtime_update,
@@ -5824,11 +5826,9 @@ class GatewayApp(WindowBase):
 
         def _do_download():
             try:
-                import urllib.request as ur
                 cache_dir = BASE_DIR / "cache"
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 target = cache_dir / RUNTIME_PACKAGE_NAME
-                partial = target.with_name(f"{target.name}.part")
                 sidecar = Path(f"{target}.sha256")
 
                 if target.is_file():
@@ -5865,71 +5865,21 @@ class GatewayApp(WindowBase):
                         )
                         return
 
-                if partial.is_file() and partial.stat().st_size > RUNTIME_PACKAGE_SIZE:
-                    partial.unlink(missing_ok=True)
-                resume_at = partial.stat().st_size if partial.exists() else 0
-                headers = {"User-Agent": f"LingJing-Desktop/{APP_VERSION}"}
-                if resume_at:
-                    headers["Range"] = f"bytes={resume_at}-"
-                request = ur.Request(url, headers=headers)
-                with _open_download_request(
-                    request,
-                    timeout=30,
-                    allowed_suffixes=RUNTIME_DOWNLOAD_REDIRECT_SUFFIXES,
-                ) as response:
-                    _validate_download_response_url(
-                        url,
-                        response,
+                def report_progress(percent, stage, detail):
+                    if not self._shutting_down:
+                        self.after(0, lambda p=percent, s=stage, d=detail:
+                                   self._set_runtime_progress(dialog, p, s, d))
+
+                download_runtime_package(
+                    url, target,
+                    size=RUNTIME_PACKAGE_SIZE,
+                    sha256=RUNTIME_PACKAGE_SHA256,
+                    open_response=lambda request, timeout: _open_download_request(
+                        request, timeout=timeout,
                         allowed_suffixes=RUNTIME_DOWNLOAD_REDIRECT_SUFFIXES,
-                    )
-                    status_code = int(getattr(response, "status", 200) or 200)
-                    partial_response = status_code == 206
-                    mode = "ab" if resume_at and partial_response else "wb"
-                    if mode == "wb":
-                        resume_at = 0
-                    remaining = int(response.headers.get("Content-Length") or 0)
-                    if partial_response:
-                        content_range = str(response.headers.get("Content-Range") or "").strip()
-                        match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+)", content_range)
-                        if not resume_at or not match:
-                            raise IOError("环境包服务器返回了无效的断点续传范围")
-                        start, end, total = (int(value) for value in match.groups())
-                        if start != resume_at or end < start or total != RUNTIME_PACKAGE_SIZE:
-                            raise IOError("环境包断点位置或总大小与发布清单不一致")
-                        if remaining and remaining != end - start + 1:
-                            raise IOError("环境包分段长度无效")
-                    elif status_code != 200:
-                        raise IOError(f"环境包服务器返回异常状态：HTTP {status_code}")
-                    elif remaining and remaining != RUNTIME_PACKAGE_SIZE:
-                        raise IOError("环境包服务器返回的文件大小与发布清单不一致")
-                    total_size = RUNTIME_PACKAGE_SIZE
-                    downloaded = resume_at
-                    with partial.open(mode) as handle:
-                        while True:
-                            chunk = response.read(8 * 1024 * 1024)
-                            if not chunk:
-                                break
-                            if downloaded + len(chunk) > RUNTIME_PACKAGE_SIZE:
-                                raise IOError("下载数据超过环境包发布清单声明的大小，已停止下载")
-                            handle.write(chunk)
-                            downloaded += len(chunk)
-                            if total_size:
-                                pct = min(100, int(downloaded * 100 / total_size))
-                                size_mb = downloaded / (1024 * 1024)
-                                self.after(
-                                    0,
-                                    lambda p=pct, s=size_mb: self._set_runtime_progress(
-                                        dialog,
-                                        p,
-                                        "下载运行环境",
-                                        f"{p}% · 已下载 {s:.1f} MB",
-                                    ),
-                                )
-                    if downloaded != RUNTIME_PACKAGE_SIZE:
-                        raise IOError(
-                            f"环境包下载不完整（应为 {RUNTIME_PACKAGE_SIZE} 字节，实际 {downloaded} 字节）"
-                        )
-                partial.replace(target)
+                    ),
+                    progress=report_progress,
+                )
                 sidecar.unlink(missing_ok=True)
                 self.after(
                     0,

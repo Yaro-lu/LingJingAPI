@@ -19,7 +19,7 @@ Two typical uses:
 
 [2.0 release notes](https://github.com/Yaro-lu/LingJingAPI/releases/tag/v2.0.0) · [Companion client page](examples/灵境造片厂示例页.html)
 
-Version: `2.0.0`. Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
+Version: `2.0.1` (local build with automatic runtime download route selection; the public download above remains 2.0.0). Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
 
 ## Three steps
 

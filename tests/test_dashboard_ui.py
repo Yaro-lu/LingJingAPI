@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import threading
 import tkinter as tk
@@ -1416,6 +1417,8 @@ class DashboardShellTests(unittest.TestCase):
                     mock.patch.object(threading.Thread, "start", lambda thread: thread.run()),
                     mock.patch.object(main_gateway, "BASE_DIR", Path(tmp)),
                     mock.patch.object(main_gateway, "RUNTIME_PACKAGE_SIZE", 7),
+                    mock.patch.object(main_gateway, "RUNTIME_PACKAGE_SHA256",
+                                      hashlib.sha256(b"runtime").hexdigest()),
                     mock.patch.object(
                         main_gateway,
                         "_open_download_request",
