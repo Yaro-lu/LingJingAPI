@@ -4,9 +4,14 @@
 
 **Use remote GPU compute to generate text, images and video.**
 
-Deploy the generation service on a rented GPU server, then use the companion client page on your computer or a browser on your phone. Models run on the server; your device submits tasks and displays or downloads the results.
+Deploy the generation service on a machine with GPU compute, then connect from computers or phones using its URL and API Key. Models run on the server; calling devices submit tasks and display or download the results.
 
-**Computer / phone ⇄ URL + API Key ⇄ Remote GPU server**
+Two typical uses:
+
+- **Rented remote compute:** deploy on a rented GPU server and connect from your computer's client page or your phone's browser.
+- **Shared office compute:** deploy on one company machine and let colleagues generate text, images and video from their computers or phones over the LAN.
+
+**Computer / phone ⇄ URL + API Key ⇄ Remote server / office GPU machine**
 
 ## Download
 
@@ -18,8 +23,8 @@ Version: `2.0.0`. Install the program and runtime on the GPU server. Neither pac
 
 ## Three steps
 
-1. **Deploy on the server:** install the program, runtime and required models, start the service, and copy its public URL and API Key.
-2. **Connect from your device:** open the companion page on your computer and enter the URL and Key. On a phone, open the same public URL in a browser and enter the Key.
+1. **Deploy the service:** install the program, runtime and required models on a rented server or office machine. Start the service and copy its public or LAN URL and API Key.
+2. **Connect from your device:** enter the URL and Key in the companion client page, or open the service URL in a computer or phone browser and enter the Key.
 3. **Generate:** select a workflow, enter a prompt or reference image, and let the remote server generate the result.
 
 ## Features
