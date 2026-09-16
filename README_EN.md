@@ -13,13 +13,11 @@ Two typical uses:
 
 **Computer / phone ⇄ URL + API Key ⇄ Remote server / office GPU machine**
 
-## Download
+## Installation
 
-**[Server program · Windows EXE](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/LingJingAI-Setup-2.0.0-win-x64.exe) | [Separate runtime package](https://github.com/Yaro-lu/LingJingAPI/releases/download/v2.0.0/runtime-nvidia-rtx20plus-cu130-v2.0.0.7z)**
+The program and runtime packages are distributed separately through this repository’s Releases section.
 
-[2.0 release notes](https://github.com/Yaro-lu/LingJingAPI/releases/tag/v2.0.0) · [Companion client page](examples/灵境造片厂示例页.html)
-
-Version: `2.0.1` (local build with automatic runtime download route selection; the public download above remains 2.0.0). Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
+Version: `2.0.2` (local build with automatic runtime route selection and H3 dimension handling; the published release remains 2.0.0). Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
 
 ## Three steps
 

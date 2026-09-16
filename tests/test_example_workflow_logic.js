@@ -285,6 +285,23 @@ const api = context.window.LingJingExample;
   assert.equal(sizeSelect.value,'768x768');
   assert.equal(referenceChoice.disabled,true);
   assert.equal(hooks.state.controls[0].input.disabled,false);
+  context.createImageBitmap=async()=>({width:800,height:800,close(){}});
+  hooks.renderDynamicInputs({id:'h3',output_type:'video',input_schema:{
+    reference_sizing:{megapixels:0.4,step:32,image_field:'image',default_to_reference:true},
+    inputs:[{name:'width',type:'integer',default:480},{name:'height',type:'integer',default:864},
+      {name:'image',type:'image'},{name:'last_image',type:'image'}]}});
+  const h3Select=nodes.get('dynamicInputs').children[1].children[0].children[1].children[0];
+  assert.equal(h3Select.value,'480x864');
+  control('image').input.files=[{}]; control('image').input.listeners.change();
+  await hooks.state.referenceSizePending;
+  assert.equal(h3Select.value,'reference');
+  assert.equal(control('width').input.value,'640');
+  assert.equal(control('height').input.value,'640');
+  control('image').input.files=[]; control('image').input.listeners.change();
+  assert.equal(h3Select.value,'480x864');
+  assert.equal(control('width').input.value,'480');
+  assert.equal(control('height').input.value,'864');
+  delete context.createImageBitmap;
   hooks.renderDynamicInputs({output_type:'video',input_schema:{inputs:[
     {name:'image',type:'image',options:['old-server-image.png'],required:true},
     {name:'duration',type:'number',default:5},{name:'fps',type:'number',default:24}]}});

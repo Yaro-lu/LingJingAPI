@@ -13,6 +13,7 @@ Local AI API Gateway — API 服务器
 import asyncio
 import base64
 import binascii
+import io
 import sys
 import json
 import random
@@ -51,6 +52,7 @@ from app.core.runtime_package import REQUIRED_RUNTIME_PATHS, missing_runtime_pat
 from app.core.runtime_state import RuntimeState  # noqa: E402
 from app.core.workflow_dependencies import workflow_dependency_report  # noqa: E402
 from app.core.workflow_adaptation import graph_hash, prepare_mapped_graph, text_roles, video_timing  # noqa: E402
+from app.core.h3_dimensions import h3_dimensions, reference_field
 from app.workflow_registry import WorkflowRegistry  # noqa: E402
 from app.tunnel.cloudflared_manager import CloudflaredManager  # noqa: E402
 from app.engines.comfyui_client import ComfyUIClient  # noqa: E402
@@ -399,6 +401,17 @@ def _workflow_payload(w) -> dict:
         installed_nodes=_installed_comfy_node_types(),
     )
     workflow_data = _workflow_json_data(w)
+    dimensions = h3_dimensions(workflow_data) if workflow_data else None
+    if dimensions and not any(f.get("name") in {"width", "height"} for f in input_schema["inputs"]):
+        image_field = reference_field(getattr(w, "api_mapping", {}) or {}, dimensions)
+        input_schema = {**input_schema, "inputs": [*input_schema["inputs"], *[
+            {"name": key, "type": "integer", "label": label, "required": False,
+             "default": dimensions[key], "minimum": dimensions["step"], "maximum": 8192,
+             "step": dimensions["step"]} for key, label in (("width", "宽度"), ("height", "高度"))]],
+            "optional": [*input_schema.get("optional", []), "width", "height"]}
+        if image_field:
+            input_schema["reference_sizing"] = {"megapixels": dimensions["megapixels"],
+                "step": dimensions["step"], "image_field": image_field, "default_to_reference": True}
     if getattr(w, "output_type", "") == "video" and workflow_data:
         timing = video_timing(workflow_data)
         input_schema = {**input_schema, "video_timing": timing, "inputs": [dict(f) for f in input_schema["inputs"]]}
@@ -1536,13 +1549,26 @@ def create_app() -> FastAPI:
                 log_offset = 0
             client = ComfyUIClient(config.comfyui_url, log_path=comfy_log_path)
             if mapped:
+                uploaded_sizes = {}
+                dimensions = h3_dimensions(workflow_data)
                 def upload_mapped_image(name, value):
                     image_data, mime_type, extension = _decode_workflow_image(value, name=name)
+                    if dimensions and name == reference_field(mapping, dimensions):
+                        from PIL import Image
+                        try:
+                            with Image.open(io.BytesIO(image_data)) as reference:
+                                size = reference.size
+                                if reference.getexif().get(274) in {5, 6, 7, 8}:
+                                    size = (size[1], size[0])
+                                uploaded_sizes[name] = size
+                        except (OSError, ValueError, Image.DecompressionBombError):
+                            raise ValueError("无法读取 H3 首帧图片尺寸") from None
                     return client.upload_input_image(image_data, f"lingjing_{task_id}_{name}.{extension}", mime_type)
 
                 try:
                     workflow_data = prepare_mapped_graph(
                         workflow_data, {**mapping, "input_schema": wf.input_schema}, body, upload_mapped_image,
+                        image_sizes=uploaded_sizes,
                     )
                     for field in wf.input_schema.get("inputs", []):
                         if field["name"] in body:

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+from app.core.h3_dimensions import h3_dimensions, h3_dimension_values, apply_h3_dimensions
 
 
 MAPPING_KEYS = ("api_mapping_status", "api_bindings", "api_graph_hash", "api_mapping_error")
@@ -461,13 +462,20 @@ def _sync_h3_duration_fps(graph):
             inputs["expression"] = re.sub(r"\ba\s*\*\s*\d+(?:\.\d+)?\b", f"a * {fps:g}", expression)
 
 
-def prepare_mapped_graph(graph, mapping, body, upload_image=None):
+def prepare_mapped_graph(graph, mapping, body, upload_image=None, image_sizes=None):
     if mapping.get("api_mapping_status") != "ready":
         raise ValueError(mapping.get("api_mapping_error") or "参数尚未确认，请在客户端手动填写")
     if graph_hash(graph) != mapping.get("api_graph_hash"):
         raise ValueError("工作流已改变，参数映射失效，请重新识别或手动填写")
     fields = validate_fields(graph, mapping_fields(mapping))
     allowed = {f["name"] for f in fields}
+    dimensions = h3_dimensions(graph)
+    # Only the recognized H3 selector link can expose these virtual inputs.
+    if dimensions and not allowed.intersection({"width", "height"}):
+        dimension_values = h3_dimension_values(dimensions, body)
+        allowed.update({"width", "height"})
+    else:
+        dimensions = None
     extras = set(body) - allowed - {"model", "response_format", "filename_prefix", "timeout", "timeout_sec"}
     if extras:
         raise ValueError("未知参数：" + ", ".join(sorted(extras)))
@@ -492,4 +500,6 @@ def prepare_mapped_graph(graph, mapping, body, upload_image=None):
         for target in field["targets"]:
             result[target["node_id"]]["inputs"][target["input"]] = value
     _sync_h3_duration_fps(result)
+    if dimensions:
+        apply_h3_dimensions(result, mapping, dimensions, dimension_values, image_sizes)
     return result

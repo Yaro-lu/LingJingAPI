@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import io
 import json
 import unittest
 from unittest import mock
@@ -15,6 +17,41 @@ from test_workflow_adaptation import example_graph
 class WorkflowAdaptationAPITests(unittest.IsolatedAsyncioTestCase):
     asyncSetUp = compatibility.ImageCompatibilityTests.asyncSetUp
     asyncTearDown = compatibility.ImageCompatibilityTests.asyncTearDown
+
+    def install_h3(self):
+        from test_h3_dimensions import h3_fixture
+        graph, mapping = h3_fixture()
+        workflow = server.registry.workflows[0]
+        (workflow.folder / "workflow.json").write_text(json.dumps(graph), encoding="utf-8")
+        workflow.api_mapping = {key: mapping[key] for key in MAPPING_KEYS}
+        workflow.input_schema = mapping["input_schema"]
+        workflow.output_type = "video"
+        workflow.workflow_type = "video.image_to_video"
+        return workflow
+
+    async def test_h3_schema_exposes_actual_dimensions_and_reference_policy(self):
+        workflow = self.install_h3()
+        with mock.patch.object(server, "_installed_comfy_node_types", return_value=set()):
+            status, _, raw = await asgi_request(self.app, "GET", f"/v1/workflows/{workflow.id}/schema", headers=self.auth)
+        self.assertEqual(status, 200)
+        schema = json.loads(raw)["input_schema"]
+        fields = {field["name"]: field for field in schema["inputs"]}
+        self.assertEqual(fields["width"]["default"], 480)
+        self.assertEqual(fields["height"]["default"], 864)
+        self.assertEqual(schema["reference_sizing"]["image_field"], "image")
+        self.assertTrue(schema["reference_sizing"]["default_to_reference"])
+
+    async def test_h3_submission_uses_decoded_reference_dimensions(self):
+        from PIL import Image
+        workflow = self.install_h3()
+        data = io.BytesIO()
+        Image.new("RGB", (800, 800)).save(data, format="PNG")
+        image = "data:image/png;base64," + base64.b64encode(data.getvalue()).decode()
+        status, _, raw = await asgi_request(self.app, "POST", f"/v1/workflows/run/{workflow.id}",
+                                           headers=self.auth, json_body={"image": image, "prompt": "test"})
+        self.assertEqual(status, 200, raw)
+        node = FakeComfyUIClient.queued_workflows[-1]["105:104"]["inputs"]
+        self.assertEqual((node["width"], node["height"]), (640, 640))
 
     def install_mapping(self, fields=None):
         workflow = server.registry.workflows[0]
