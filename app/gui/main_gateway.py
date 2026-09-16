@@ -6219,7 +6219,7 @@ class GatewayApp(WindowBase):
                     if completed.is_set():
                         return
                     state["shown"] = True
-                    action_button.config(
+                    action_button.configure(
                         state="disabled",
                         text=f"正在退出并完成{action}…",
                     )

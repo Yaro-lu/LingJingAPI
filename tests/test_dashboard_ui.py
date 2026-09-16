@@ -1093,6 +1093,8 @@ class DashboardShellTests(unittest.TestCase):
             "content": content,
         }
         action_button = mock.MagicMock()
+        # Match CTkBaseClass: config() raises instead of aliasing configure().
+        action_button.config.side_effect = AttributeError("config is not implemented for CTk widgets")
         status_label = mock.MagicMock()
 
         def build_button(_parent, _text, command, _style, **_kwargs):
@@ -1108,7 +1110,8 @@ class DashboardShellTests(unittest.TestCase):
             accepted = app._show_manual_restart_notice(dialog, component="运行环境")
 
         self.assertTrue(accepted)
-        action_button.config.assert_called_once_with(
+        action_button.config.assert_not_called()
+        action_button.configure.assert_called_once_with(
             state="disabled",
             text="正在退出并完成安装…",
         )
