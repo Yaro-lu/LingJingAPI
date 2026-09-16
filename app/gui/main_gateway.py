@@ -73,6 +73,7 @@ from app.core.runtime_package import (  # noqa: E402
     resolve_runtime_download_url,
 )
 from app.core.runtime_download import download_runtime_package
+from app.core.workflow_capability import infer_capability, output_kind
 from app.core.runtime_update import (  # noqa: E402
     consume_runtime_update_result,
     launch_runtime_update,
@@ -2851,7 +2852,7 @@ class GatewayApp(WindowBase):
         self._update_workflow_display(self._last_health or {})
 
     def _workflow_group_for_display(self, workflow: dict) -> str:
-        output_type = str(workflow.get("output_type") or "").strip().lower()
+        output_type = output_kind(workflow)
         declared_type = str(
             workflow.get("workflow_type") or workflow.get("type") or ""
         ).strip().lower()
@@ -2895,7 +2896,7 @@ class GatewayApp(WindowBase):
         return ""
 
     def _workflow_capability_meta(self, workflow: dict) -> tuple[str, str, str]:
-        capability = str(workflow.get("capability") or "").strip().lower()
+        capability = infer_capability(workflow) or str(workflow.get("capability") or "").strip().lower()
         declared_type = str(
             workflow.get("workflow_type") or workflow.get("type") or ""
         ).strip().lower()
@@ -2904,6 +2905,12 @@ class GatewayApp(WindowBase):
                 capability = "text_image_to_image"
             elif "first_last" in declared_type or "flf2v" in declared_type:
                 capability = "first_last_frame"
+            elif declared_type == "video.image_to_video":
+                capability = "image_to_video"
+            elif declared_type == "video.text_to_video":
+                capability = "text_to_video"
+            elif output_kind(workflow) == "video":
+                capability = "video_model"
             elif declared_type.startswith("text") or "chat" in declared_type:
                 capability = "text_model"
             else:
@@ -2913,6 +2920,10 @@ class GatewayApp(WindowBase):
             "image_to_image": ("图生图", "#7c3aed"),
             "text_to_image": ("文生图", "#2563eb"),
             "first_last_frame": ("首尾帧", "#e8790c"),
+            "image_to_video": ("图生视频", "#e8790c"),
+            "text_to_video": ("文生视频", "#e8790c"),
+            "video_to_video": ("视频转视频", "#e8790c"),
+            "video_model": ("视频", "#e8790c"),
             "text_model": ("文本模型", "#0f9f84"),
         }
         label, color = styles.get(capability, ("自定义", C["text2"]))
@@ -7206,6 +7217,7 @@ class GatewayApp(WindowBase):
                 "label": wf.get("name", wf.get("id", "")),
                 "type": wf.get("type", ""),
                 "capability": wf.get("capability", ""),
+                "output_type": wf.get("output_type", ""),
                 "model_group": wf.get("model_group", ""),
                 "available": wf.get("enabled", True) and self._workflow_model_available(wf),
                 "workflowId": wf.get("id", ""),
@@ -7215,7 +7227,7 @@ class GatewayApp(WindowBase):
             models.append({
                 **model,
             })
-            group = self._model_group_for_type(model["type"])
+            group = self._workflow_group_for_display(model)
             model_groups.setdefault(group, []).append(model)
         raw_current_task = self._last_health.get("current_task")
         safe_current_task = None
