@@ -6242,6 +6242,21 @@ class GatewayApp(WindowBase):
                     width=142,
                 )
                 action_button.pack(anchor="e")
+                # This handoff may appear above the model download window.
+                # Release the application-wide grab so sibling dialogs cannot
+                # leave the confirmation inaccessible on Windows.
+                grabbed = popup.grab_current()
+                if grabbed is not None:
+                    grabbed.grab_release()
+                # The progress window is only 270px high. Measure the complete
+                # notice (including its action) before reusing that window.
+                popup.update_idletasks()
+                self._center_popup(
+                    popup,
+                    max(540, notice.winfo_reqwidth() + 92),
+                    max(360, notice.winfo_reqheight() + 84),
+                )
+                popup.resizable(True, True)
                 popup.protocol("WM_DELETE_WINDOW", accept)
                 popup.lift()
                 popup.focus_force()

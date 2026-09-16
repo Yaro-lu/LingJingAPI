@@ -1081,6 +1081,10 @@ class DashboardShellTests(unittest.TestCase):
         app._shutting_down = False
         app.after = lambda _delay, callback: callback()
         app._restore_maintenance_dialog = mock.Mock()
+        app._center_popup = mock.Mock()
+        notice = mock.MagicMock()
+        notice.winfo_reqwidth.return_value = 480
+        notice.winfo_reqheight.return_value = 320
         popup = mock.MagicMock()
         content = mock.MagicMock()
         dialog = {
@@ -1098,7 +1102,7 @@ class DashboardShellTests(unittest.TestCase):
         app._button = build_button
         labels = [mock.MagicMock(), mock.MagicMock(), status_label]
         with (
-            mock.patch.object(main_gateway.tk, "Frame", return_value=mock.MagicMock()),
+            mock.patch.object(main_gateway.tk, "Frame", return_value=notice),
             mock.patch.object(main_gateway.tk, "Label", side_effect=labels),
         ):
             accepted = app._show_manual_restart_notice(dialog, component="运行环境")
@@ -1112,7 +1116,10 @@ class DashboardShellTests(unittest.TestCase):
             text="正在关闭后台服务并启动安装助手，请稍候…",
             fg=C["primary"],
         )
-        popup.update_idletasks.assert_called_once_with()
+        self.assertGreaterEqual(popup.update_idletasks.call_count, 2)
+        app._center_popup.assert_called_once_with(popup, 572, 404)
+        popup.grab_current.return_value.grab_release.assert_called_once_with()
+        popup.resizable.assert_called_once_with(True, True)
 
     def test_restore_maintenance_dialog_reveals_progress_after_handoff_error(self):
         app = object.__new__(GatewayApp)
