@@ -5242,7 +5242,7 @@ class GatewayApp(WindowBase):
         self._show_runtime_download_fallback("当前版本没有配置运行环境包下载地址。")
 
     def _show_runtime_download_fallback(self, error_message: str):
-        """Offer a copyable manual route only after automatic acquisition fails."""
+        """Offer browser download alternatives after automatic acquisition fails."""
         reason = " ".join(str(error_message or "网络连接异常").split())
         if len(reason) > 180:
             reason = f"{reason[:177]}..."
@@ -5253,7 +5253,7 @@ class GatewayApp(WindowBase):
         popup.transient(self)
         popup.grab_set()
         popup.resizable(False, False)
-        self._center_popup(popup, 620, 350)
+        self._center_popup(popup, 620, 460)
 
         panel = self._card(popup, fill="both", expand=True, padx=16, pady=16)
         tk.Label(
@@ -5266,7 +5266,7 @@ class GatewayApp(WindowBase):
         tk.Label(
             panel,
             text=(
-                "可能是网络问题或 GitHub 暂时不可达。请在项目主页进入 Releases，"
+                "自动下载线路不可用。可点击下方网盘按钮，在浏览器中下载环境包；"
                 f"下载 {RUNTIME_PACKAGE_NAME}。\n"
                 "下载完成后回到客户端，选择本地环境包继续安装或修复。"
             ),
@@ -5286,6 +5286,25 @@ class GatewayApp(WindowBase):
             justify="left",
             wraplength=550,
         ).pack(anchor="w", padx=22, pady=(0, 10))
+
+        for name, url, code in (
+            ("123 云盘", "https://1817692300.share.123pan.cn/123pan/lZtTjv-jOG4h?pwd=KkJt#", "KkJt"),
+            ("百度网盘", "https://pan.baidu.com/s/1Tt5khCdRs13nymP9hHCn7Q", "wdmt"),
+        ):
+            row = tk.Frame(panel, bg=C["card"])
+            row.pack(fill="x", padx=22, pady=(0, 10))
+            self._button(
+                row, f"打开 {name}",
+                lambda u=url: webbrowser.open(u), "primary", width=130,
+            ).pack(side="left")
+            tk.Label(
+                row, text=f"提取码：{code}", font=F["normal"],
+                fg=C["text"], bg=C["card"],
+            ).pack(side="left", padx=12)
+            self._button(
+                row, "复制提取码", lambda c=code: self._copy(c),
+                "plain", width=100,
+            ).pack(side="right")
 
         url_row = tk.Frame(panel, bg=C["card"])
         url_row.pack(fill="x", padx=22)

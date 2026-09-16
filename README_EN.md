@@ -17,7 +17,7 @@ Two typical uses:
 
 The program and runtime packages are distributed separately through this repository’s Releases section.
 
-Version: `2.0.2` (local build with automatic runtime route selection and H3 dimension handling; the published release remains 2.0.0). Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
+Version: `2.0.1`. Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
 
 ## Three steps
 
