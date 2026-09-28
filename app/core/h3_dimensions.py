@@ -10,6 +10,13 @@ def h3_dimensions(graph):
         return None
     node_id, node = nodes[0]
     width, height = (node["inputs"].get(key) for key in ("width", "height"))
+    first = node["inputs"].get("first_frame")
+    image_node = str(first[0]) if isinstance(first, list) and len(first) == 2 and first[1] == 0 else None
+    if graph.get(image_node, {}).get("class_type") != "LoadImage":
+        image_node = None
+    if all(type(value) is int and 32 <= value <= 8192 and value % 32 == 0 for value in (width, height)):
+        return {"node_id": node_id, "width": width, "height": height, "step": 32,
+                "megapixels": width * height / (1024 * 1024), "image_node": image_node}
     if not (isinstance(width, list) and isinstance(height, list) and len(width) == len(height) == 2
             and width[0] == height[0] and width[1] == 0 and height[1] == 1):
         return None
@@ -30,10 +37,6 @@ def h3_dimensions(graph):
         return None
     scale = math.sqrt(megapixels * 1024 * 1024 / (w * h))
     step = math.lcm(multiple, 32)
-    first = node["inputs"].get("first_frame")
-    image_node = str(first[0]) if isinstance(first, list) and len(first) == 2 and first[1] == 0 else None
-    if graph.get(image_node, {}).get("class_type") != "LoadImage":
-        image_node = None
     return {"node_id": node_id, "width": max(step, round(w * scale / step) * step),
             "height": max(step, round(h * scale / step) * step), "step": step,
             "megapixels": megapixels, "image_node": image_node}

@@ -34,6 +34,22 @@ class ServerStatusTests(unittest.TestCase):
                 {"url": "", "checked_at": 0.0, "nodes": None}
             )
 
+    def test_client_page_supports_installation_and_source_layouts(self):
+        for directory in ("", "examples"):
+            with self.subTest(directory=directory), tempfile.TemporaryDirectory() as temp_dir:
+                base = Path(temp_dir)
+                page = base / directory / "灵境造片厂示例页.html"
+                page.parent.mkdir(parents=True, exist_ok=True)
+                page.write_text('<html>savedConnection.url || "http://127.0.0.1:18188"</html>', encoding="utf-8")
+                with mock.patch.object(server, "BASE_DIR", base):
+                    app = server.create_app()
+                    endpoint = next(route.endpoint for route in app.routes if route.path == "/")
+                    response = asyncio.run(endpoint())
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("window.location.origin", response.body.decode())
+                self.assertIn("text/html", response.media_type)
+                self.assertIn("savedConnection.url", page.read_text(encoding="utf-8"))
+
     def test_server_version_matches_release_version_file(self):
         expected = (Path(__file__).resolve().parents[1] / "VERSION").read_text(
             encoding="utf-8"

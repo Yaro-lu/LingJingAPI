@@ -5,7 +5,7 @@ from app.core.workflow_capability import infer_capability, output_kind
 
 class WorkflowCapabilityTests(unittest.TestCase):
     def test_actual_h3(self):
-        data = json.loads((Path(__file__).resolve().parents[1] / "workflows/video_minimax_h3_i2v/manifest.json").read_text(encoding="utf-8"))
+        data = json.loads((Path(__file__).resolve().parents[1] / "workflows/lingjing_h3_3060ti_regular_it2v/manifest.json").read_text(encoding="utf-8"))
         data["capability"] = "text_to_image"
         data["name"] = "unrelated name"
         self.assertEqual(infer_capability(data), "image_to_video")

@@ -450,6 +450,8 @@ class StaticDashboardPages:
         return "■", label, tone
 
     def _workflow_state(self, workflow: dict) -> tuple[str, str, str, str]:
+        if workflow.get("api_mapping_status") == "pending_conversion":
+            return "待修复", "neutral", "原文件已保留，点击修复节点和模型", ""
         if workflow.get("manifest_error") or not workflow.get("workflow_json", True):
             return "文件异常", "danger", "工作流文件不完整", ""
         if not workflow.get("enabled", True):
@@ -564,14 +566,18 @@ class StaticDashboardPages:
             actions.pack(side="right", padx=(12, 0))
             wf_id = str(workflow.get("id") or "")
             enabled = bool(workflow.get("enabled", True))
-            if enabled and state not in {"文件异常", "需要检查"} and not state.startswith("缺少") and not workflow.get("is_default"):
+            if enabled and state not in {"待修复", "文件异常", "需要检查"} and not state.startswith("缺少") and not workflow.get("is_default"):
                 self._action(actions, "设为默认", lambda key=wf_id: self.app._set_default_workflow(key),
                              "plain", 66).pack(side="left", padx=(0, 5))
-            self._action(actions, "停用" if enabled else "启用",
-                         lambda key=wf_id, value=not enabled: self.app._set_workflow_enabled(key, value),
-                         "plain" if enabled else "primary", 52).pack(side="left", padx=(0, 5))
-            self._action(actions, "配置 / 详情", lambda item=dict(workflow): self.app._show_workflow_schema(item),
-                         "plain", 84).pack(side="left")
+            if state == "待修复":
+                self._action(actions, "修复", lambda item=dict(workflow): self.app._show_workflow_repair(item),
+                             "plain", 84).pack(side="left")
+            else:
+                self._action(actions, "停用" if enabled else "启用",
+                             lambda key=wf_id, value=not enabled: self.app._set_workflow_enabled(key, value),
+                             "plain" if enabled else "primary", 52).pack(side="left", padx=(0, 5))
+                self._action(actions, "配置 / 详情", lambda item=dict(workflow): self.app._show_workflow_schema(item),
+                             "plain", 84).pack(side="left")
             # Every workflow can resolve downloads or map existing local files.
             self._action(actions, "模型文件", lambda item=dict(workflow): self.app._show_workflow_model_help(item),
                          "primary" if state.startswith("缺少") else "plain", 76).pack(side="left", padx=(5, 0))
@@ -581,11 +587,16 @@ class StaticDashboardPages:
             text_box.pack_propagate(False)
             heading = tk.Frame(text_box, bg=self.c["card"])
             heading.pack(fill="x")
-            self._badge(heading, kind, kind_tone).pack(side="left", padx=(0, 7))
+            self._badge(heading, "待修复" if state == "待修复" else kind,
+                        "neutral" if state == "待修复" else kind_tone).pack(side="left", padx=(0, 7))
             if workflow.get("is_default"):
                 self._badge(heading, "默认", "primary").pack(side="right", padx=(5, 0))
-            tk.Label(heading, text=self._short_text(workflow.get("name") or wf_id, 30), font=self.f["bold"],
-                     fg=self.c["text"], bg=self.c["card"], anchor="w").pack(side="left", fill="x", expand=True)
+            name_label = tk.Label(heading, text=self._short_text(workflow.get("name") or wf_id, 30), font=self.f["bold"],
+                                  fg=self.c["text"], bg=self.c["card"], anchor="w")
+            name_label.pack(side="left", fill="x", expand=True)
+            if state == "待修复":
+                name_label.configure(cursor="hand2")
+                name_label.bind("<Button-1>", lambda _event, item=dict(workflow): self.app._show_workflow_repair(item))
             tk.Label(text_box, text=self._short_text(workflow.get("description") or "暂无简介", 56), font=self.f["small"],
                      fg=self.c["text2"], bg=self.c["card"], anchor="w").pack(fill="x", pady=(2, 0))
             model_note, _, _ = self._model_summary(model_key) if model_key else ("", "neutral", False)

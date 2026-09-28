@@ -97,6 +97,15 @@ class UnifiedMaintenanceTests(unittest.TestCase):
     def actions(root, text):
         return [w for w in root.walk() if w.options.get("text") == text and "command" in w.options]
 
+    def test_pending_workflow_status_precedes_disabled_and_missing_file(self):
+        pages = object.__new__(StaticDashboardPages)
+        item = {"api_mapping_status": "pending_conversion", "enabled": False, "workflow_json": ""}
+        state, tone, detail, key = pages._workflow_state(item)
+        self.assertEqual((state, tone), ("待修复", "neutral"))
+        app = object.__new__(GatewayApp)
+        self.assertFalse(app._workflow_model_available(item))
+        self.assertEqual(app._workflow_status_text(item, False), "待修复")
+
     def test_all_workflow_actions_keep_their_target_and_disabled_model_download(self):
         root = Widget()
         self.pages._build_workflow_models(root)

@@ -470,8 +470,13 @@ def prepare_mapped_graph(graph, mapping, body, upload_image=None, image_sizes=No
     fields = validate_fields(graph, mapping_fields(mapping))
     allowed = {f["name"] for f in fields}
     dimensions = h3_dimensions(graph)
-    # Only the recognized H3 selector link can expose these virtual inputs.
-    if dimensions and not allowed.intersection({"width", "height"}):
+    # Recognized H3 dimensions may be literal bindings or virtual selector inputs.
+    dimension_fields = [f for f in fields if f["name"] in {"width", "height"}]
+    direct_dimensions = dimensions and len(dimension_fields) == 2 and all(
+        f["targets"] == [{"node_id": dimensions["node_id"], "input": f["name"]}]
+        for f in dimension_fields
+    )
+    if dimensions and (not dimension_fields or direct_dimensions):
         dimension_values = h3_dimension_values(dimensions, body)
         allowed.update({"width", "height"})
     else:

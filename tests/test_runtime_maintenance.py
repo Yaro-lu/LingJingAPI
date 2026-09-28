@@ -52,6 +52,158 @@ class RuntimeMaintenanceTests(unittest.TestCase):
         self.assertTrue(sources[0][1].startswith("https://hf-mirror.com/"))
         self.assertEqual(sources[1], ("官方源", official))
 
+    def test_model_download_selects_the_faster_valid_source(self):
+        mirror = "https://hf-mirror.com/org/model/resolve/main/model.safetensors"
+        official = "https://huggingface.co/org/model/resolve/main/model.safetensors"
+
+        class Probe(io.BytesIO):
+            status = 206
+
+            def __init__(self, slow):
+                super().__init__(b"model")
+                self.slow = slow
+                self.headers = {"Content-Range": "bytes 0-4/5", "Content-Length": "5"}
+
+            def read(self, size=-1):
+                if self.slow:
+                    time.sleep(0.025)
+                return super().read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        with mock.patch.object(
+            main_gateway, "_open_download_request",
+            side_effect=lambda request, **_kwargs: Probe(request.full_url == mirror),
+        ):
+            self.assertEqual(
+                main_gateway._rank_model_download_sources([mirror, official], 5),
+                [official, mirror],
+            )
+
+
+    def test_model_download_keeps_partial_when_fastest_source_fails_over(self):
+        app = self._app()
+        app.after = lambda _delay, callback: callback()
+        app._set_model_download_status = mock.Mock()
+        app._finish_model_download = mock.Mock()
+        app._fail_model_download = mock.Mock()
+        app._update_model_download_progress = mock.Mock()
+        mirror = "https://hf-mirror.com/org/model/resolve/main/model.safetensors"
+        official = "https://huggingface.co/org/model/resolve/main/model.safetensors"
+
+        class Response(io.BytesIO):
+            def __init__(self, payload, status, headers, interrupt=False):
+                super().__init__(payload)
+                self.status = status
+                self.headers = headers
+                self.interrupt = interrupt
+                self.reads = 0
+
+            def read(self, size=-1):
+                self.reads += 1
+                if self.interrupt and self.reads > 1:
+                    raise urllib.error.URLError(ConnectionResetError(10054, "connection reset"))
+                return super().read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        calls = []
+
+        def open_request(request, **_kwargs):
+            calls.append(request)
+            if request.full_url == mirror:
+                if sum(call.full_url == mirror for call in calls) == 1:
+                    return Response(b"mo", 200, {"Content-Length": "5", "ETag": '"same"'}, True)
+                raise urllib.error.URLError(ConnectionResetError(10054, "connection reset"))
+            self.assertEqual(request.get_header("Range"), "bytes=2-")
+            self.assertIsNone(request.get_header("If-range"), "ETag belongs to the previous server")
+            return Response(b"del", 206, {
+                "Content-Length": "3", "Content-Range": "bytes 2-4/5", "ETag": '"official-etag"'
+            })
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "model.safetensors"
+            control = {
+                "url": mirror, "urls": [mirror, official], "target": target,
+                "item": {"size_bytes": 5, "sha256": hashlib.sha256(b"model").hexdigest()},
+                "pause_event": threading.Event(), "status_var": mock.Mock(),
+            }
+            with (
+                mock.patch.object(main_gateway, "_rank_model_download_sources", return_value=[mirror, official]),
+                mock.patch.object(main_gateway, "_open_download_request", side_effect=open_request),
+                mock.patch.object(main_gateway.time, "sleep"),
+            ):
+                app._download_model_file(control)
+
+            self.assertEqual(target.read_bytes(), b"model")
+            self.assertEqual(control["url"], official)
+            self.assertGreaterEqual(sum(call.full_url == mirror for call in calls), 7)
+            app._finish_model_download.assert_called_once_with(control)
+            app._fail_model_download.assert_not_called()
+
+
+    def test_model_download_can_resume_without_server_validator(self):
+        app = self._app()
+        app.after = lambda _delay, callback: callback()
+        app._set_model_download_status = mock.Mock()
+        app._finish_model_download = mock.Mock()
+        app._fail_model_download = mock.Mock()
+        app._update_model_download_progress = mock.Mock()
+
+        class Response(io.BytesIO):
+            def __init__(self, payload, status, headers, interrupt=False):
+                super().__init__(payload)
+                self.status = status
+                self.headers = headers
+                self.interrupt = interrupt
+                self.reads = 0
+
+            def read(self, size=-1):
+                self.reads += 1
+                if self.interrupt and self.reads > 1:
+                    raise urllib.error.URLError(ConnectionResetError(10054, "connection reset"))
+                return super().read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        def open_request(request, **_kwargs):
+            if request.get_header("Range"):
+                self.assertEqual(request.get_header("Range"), "bytes=2-")
+                self.assertIsNone(request.get_header("If-range"))
+                return Response(b"del", 206, {"Content-Length": "3", "Content-Range": "bytes 2-4/5"})
+            return Response(b"mo", 200, {"Content-Length": "5"}, True)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "model.safetensors"
+            control = {
+                "url": "https://hf-mirror.com/org/model/resolve/main/model.safetensors",
+                "target": target,
+                "item": {"size_bytes": 5, "sha256": hashlib.sha256(b"model").hexdigest()},
+                "pause_event": threading.Event(), "status_var": mock.Mock(),
+            }
+            with (
+                mock.patch.object(main_gateway, "_open_download_request", side_effect=open_request),
+                mock.patch.object(main_gateway.time, "sleep"),
+            ):
+                app._download_model_file(control)
+
+            self.assertEqual(target.read_bytes(), b"model")
+            app._finish_model_download.assert_called_once_with(control)
+            app._fail_model_download.assert_not_called()
+
+
     def test_finished_model_download_triggers_one_model_status_recheck(self):
         app = self._app()
         app._release_model_transfer = mock.Mock()
@@ -741,6 +893,8 @@ class RuntimeMaintenanceTests(unittest.TestCase):
             return {
                 "state": "idle",
                 "target": target,
+                "urls": ["https://huggingface.co/org/repo/resolve/main/model.safetensors"],
+                "item": {"size_bytes": 5, "sha256": hashlib.sha256(b"model").hexdigest()},
                 "pause_event": threading.Event(),
                 "stop_event": threading.Event(),
                 "status_var": mock.Mock(),

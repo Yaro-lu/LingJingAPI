@@ -1772,7 +1772,11 @@ def create_app() -> FastAPI:
     # ── 路由 ──
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def client_page():
-        page = BASE_DIR / "examples" / "灵境造片厂示例页.html"
+        # Releases place the standalone page at the installation root;
+        # source checkouts keep it in examples/.
+        page = BASE_DIR / "灵境造片厂示例页.html"
+        if not page.is_file():
+            page = BASE_DIR / "examples" / "灵境造片厂示例页.html"
         if not page.is_file():
             raise HTTPException(status_code=404, detail="客户端页面文件不存在")
         content = page.read_text(encoding="utf-8")

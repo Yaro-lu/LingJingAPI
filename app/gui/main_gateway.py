@@ -21,6 +21,7 @@ import unicodedata
 import webbrowser
 import msvcrt
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 import urllib.request as urllib_request
@@ -71,6 +72,9 @@ from app.core.runtime_package import (  # noqa: E402
     validate_staged_runtime,
     verify_runtime_package,
     resolve_runtime_download_url,
+)
+from app.core.model_source_discovery import (
+    discover_model_sources, verify_hf_model_url, load_saved_source, save_verified_source,
 )
 from app.core.runtime_download import download_runtime_package
 from app.core.workflow_capability import infer_capability, output_kind
@@ -137,6 +141,62 @@ PROJECT_LATEST_RELEASE_API_URL = (
     f"https://api.github.com/repos/{PROJECT_REPOSITORY}/releases/latest"
 )
 MAX_RELEASE_METADATA_BYTES = 64 * 1024
+
+
+def _rank_model_download_sources(urls: list[str], expected_size: int) -> list[str]:
+    """Probe a small range from each source; keep unreachable sources as fallbacks."""
+    if len(urls) < 2 or expected_size <= 0:
+        return list(urls)
+    sample_size = min(128 * 1024, expected_size)
+
+    def speed(url: str) -> float:
+        request = urllib_request.Request(
+            url,
+            headers={
+                "User-Agent": "lingjing-model-downloader/1.0",
+                "Range": f"bytes=0-{sample_size - 1}",
+            },
+        )
+        started = time.monotonic()
+        try:
+            with _open_download_request(
+                request, timeout=8, allowed_suffixes=MODEL_DOWNLOAD_REDIRECT_SUFFIXES
+            ) as response:
+                _validate_download_response_url(
+                    url, response, allowed_suffixes=MODEL_DOWNLOAD_REDIRECT_SUFFIXES
+                )
+                status = int(getattr(response, "status", 200) or 200)
+                if status == 206:
+                    match = re.fullmatch(
+                        r"bytes\s+0-(\d+)/(\d+)",
+                        str(response.headers.get("Content-Range") or "").strip(),
+                    )
+                    if not match or int(match.group(2)) != expected_size or int(match.group(1)) != sample_size - 1:
+                        return 0.0
+                    if int(response.headers.get("Content-Length") or sample_size) != sample_size:
+                        return 0.0
+                elif status == 200:
+                    if int(response.headers.get("Content-Length") or 0) != expected_size:
+                        return 0.0
+                else:
+                    return 0.0
+                received = 0
+                while received < sample_size:
+                    chunk = response.read(sample_size - received)
+                    if not chunk:
+                        return 0.0
+                    received += len(chunk)
+                return received / max(time.monotonic() - started, 0.001)
+        except Exception:
+            return 0.0
+
+    with ThreadPoolExecutor(max_workers=min(len(urls), 3)) as executor:
+        futures = [executor.submit(speed, url) for url in urls]
+        speeds = [future.result() for future in futures]
+    return [url for _, url in sorted(
+        enumerate(urls), key=lambda item: (-speeds[item[0]], item[0])
+    )]
+
 
 
 def _release_version_tuple(value: str):
@@ -2896,6 +2956,8 @@ class GatewayApp(WindowBase):
         return ""
 
     def _workflow_capability_meta(self, workflow: dict) -> tuple[str, str, str]:
+        if workflow.get("api_mapping_status") == "pending_conversion":
+            return "pending_conversion", "待修复", C["muted"]
         capability = infer_capability(workflow) or str(workflow.get("capability") or "").strip().lower()
         declared_type = str(
             workflow.get("workflow_type") or workflow.get("type") or ""
@@ -2933,6 +2995,8 @@ class GatewayApp(WindowBase):
         return str(workflow.get("name") or workflow.get("label") or workflow.get("id") or "未命名工作流").strip()
 
     def _workflow_status_text(self, workflow: dict, available: bool) -> str:
+        if workflow.get("api_mapping_status") == "pending_conversion":
+            return "待修复"
         if not workflow.get("enabled", True):
             return "已停用"
         if available:
@@ -3148,7 +3212,15 @@ class GatewayApp(WindowBase):
         def worker():
             try:
                 from app.core.workflow_model_sources import workflow_model_items
-                items = workflow_model_items(workflow, BASE_DIR)
+                graph = None
+                registered = self._workflow_registry().get(str(workflow.get("id") or ""))
+                if registered and registered.folder:
+                    for filename in ("workflow.json", "frontend_workflow.json"):
+                        graph_path = registered.folder / filename
+                        if graph_path.is_file() and graph_path.stat().st_size <= 64 * 1024 * 1024:
+                            graph = json.loads(graph_path.read_text(encoding="utf-8-sig"))
+                            break
+                items = workflow_model_items(workflow, BASE_DIR, graph)
                 if not items:
                     key = self._workflow_model_key(workflow)
                     items = list(MODEL_REQUIREMENTS.get(key, {}).get("items", []))
@@ -3316,6 +3388,10 @@ class GatewayApp(WindowBase):
 
     def _build_model_download_row(self, parent, model_key: str, item: dict, index: int) -> dict:
         rel_path = str(item.get("path") or "").strip()
+        if not item.get("url"):
+            saved = load_saved_source(BASE_DIR / "runtime" / "model_sources.json", rel_path)
+            if saved:
+                item = {**item, **saved}
         sources = self._model_download_sources(item.get("url", ""))
         url = sources[0][1] if sources else ""
         target = _models_dir() / rel_path
@@ -3334,21 +3410,20 @@ class GatewayApp(WindowBase):
 
         url_row = tk.Frame(card, bg=C["card"])
         url_row.grid(row=2, column=1, sticky="ew", pady=(7, 9))
-        for source_index, (source_name, source_url) in enumerate(sources):
-            source_row = tk.Frame(url_row, bg=C["card"])
-            source_row.pack(fill="x", pady=(0 if source_index == 0 else 3, 0))
-            tk.Label(source_row, text=source_name, width=7, anchor="w", font=F["small"], fg=C["text2"], bg=C["card"]).pack(side="left")
-            url_label = tk.Label(
-                source_row,
-                text=self._short_middle(source_url, 34, 16),
-                font=F["url"],
-                fg=C["primary"],
-                bg=C["card"],
-                anchor="w",
-                cursor="hand2",
-            )
-            url_label.pack(side="left", padx=(6, 0), fill="x", expand=True)
-            url_label.bind("<Button-1>", lambda _event, u=source_url: webbrowser.open(u))
+        def draw_sources(current_sources):
+            for child in url_row.winfo_children():
+                child.destroy()
+            for source_index, (source_name, source_url) in enumerate(current_sources):
+                source_row = tk.Frame(url_row, bg=C["card"])
+                source_row.pack(fill="x", pady=(0 if source_index == 0 else 3, 0))
+                tk.Label(source_row, text=source_name, width=7, anchor="w", font=F["small"], fg=C["text2"], bg=C["card"]).pack(side="left")
+                url_label = tk.Label(
+                    source_row, text=self._short_middle(source_url, 34, 16),
+                    font=F["url"], fg=C["primary"], bg=C["card"], anchor="w", cursor="hand2",
+                )
+                url_label.pack(side="left", padx=(6, 0), fill="x", expand=True)
+                url_label.bind("<Button-1>", lambda _event, u=source_url: webbrowser.open(u))
+        draw_sources(sources)
 
         right = tk.Frame(card, bg=C["card"])
         right.grid(row=0, column=2, rowspan=3, sticky="nsew", padx=(12, 12), pady=9)
@@ -3381,6 +3456,47 @@ class GatewayApp(WindowBase):
         )
         status.pack(side="left", fill="x", expand=True)
 
+        source_actions = tk.Frame(card, bg=C["card"])
+        source_actions.grid(row=4, column=1, columnspan=2, sticky="ew", pady=(0, 8))
+        source_actions.grid_remove()
+        candidate_choice = ttk.Combobox(source_actions, state="readonly", width=72)
+        manual_url = tk.Entry(source_actions, font=F["url"], bg=C["entry"], fg=C["text"])
+
+        def show_source_choices(candidates, on_selected):
+            source_actions.grid()
+            for child in source_actions.winfo_children():
+                child.pack_forget()
+            if len(candidates) > 1:
+                choices = candidates
+                candidate_choice.configure(values=[
+                    f"{entry['repo']} · {entry['size_bytes'] / 1_000_000_000:.1f} GB · SHA256 {entry['sha256'][:12]}…"
+                    for entry in choices
+                ])
+                candidate_choice.current(0)
+                def preview_choice(_event=None):
+                    choice = candidate_choice.current()
+                    if choice >= 0:
+                        manual_url.delete(0, "end")
+                        manual_url.insert(0, choices[choice]["url"])
+                candidate_choice.bind("<<ComboboxSelected>>", preview_choice)
+                candidate_choice.pack(side="top", fill="x", padx=(0, 12), pady=(0, 5))
+                self._button(
+                    source_actions, "使用所选版本",
+                    lambda: on_selected(choices[candidate_choice.current()]) if candidate_choice.current() >= 0 else None,
+                    "plain", width=108,
+                ).pack(side="top", anchor="e", padx=(0, 12), pady=(0, 5))
+            manual_url.pack(side="left", fill="x", expand=True)
+            manual_url.delete(0, "end")
+            manual_url.insert(0, "粘贴 Hugging Face 文件页面或下载地址")
+            if len(candidates) > 1:
+                preview_choice()
+            manual_url.bind("<FocusIn>", lambda _event: manual_url.delete(0, "end") if manual_url.get().startswith("粘贴 Hugging Face") else None)
+            self._button(
+                source_actions, "核对地址",
+                lambda: on_selected(manual_url.get().strip()),
+                "plain", width=82,
+            ).pack(side="right", padx=(6, 12))
+
         control = {
             "model_key": model_key,
             "item": item,
@@ -3397,6 +3513,9 @@ class GatewayApp(WindowBase):
             "pause_event": threading.Event(),
             "stop_event": threading.Event(),
             "worker": None,
+            "set_sources": draw_sources,
+            "show_source_choices": show_source_choices,
+            "hide_source_choices": source_actions.grid_remove,
         }
         control["views"] = [control]
         button_row = tk.Frame(action_line, bg=C["card"])
@@ -3408,18 +3527,18 @@ class GatewayApp(WindowBase):
         cancel_button.pack(side="left", padx=(0, 6))
         cancel_button.configure(state="disabled")
         button = self._button(button_row, "下载", lambda c=control: self._start_model_download(c), "primary", width=72)
-        if not url:
-            button.configure(state="disabled", text="无地址")
         button.pack(side="left")
         control["button"] = button
         control["pause_button"] = pause_button
         control["cancel_button"] = cancel_button
+        if not item.get("sha256") or not item.get("size_bytes"):
+            self._button(button_row, "填写地址", lambda c=control: self._resolve_model_source(c, manual=True), "plain", width=72).pack(side="left", padx=(6, 0))
         self._button(button_row, "选择本地模型", lambda c=control: self._map_local_model(c), "plain", width=104).pack(side="left", padx=(6, 0))
         if _model_file_ready(target, item.get("size_bytes")):
             control.update(state="done", status_text="本地模型已就绪", progress_percent=100.0)
             self._refresh_model_download_views(control)
         elif not url:
-            control["status_text"] = "未找到下载来源，可选择本地模型"
+            control["status_text"] = "可查找来源、填写地址或选择本地模型"
             status_var.set(control["status_text"])
         owner = self._model_transfer_for(target)
         if owner is not None and owner is not control:
@@ -3429,6 +3548,120 @@ class GatewayApp(WindowBase):
         else:
             self._refresh_model_download_views(control)
         return control
+
+    def _resolve_model_source(self, control: dict, *, manual=False):
+        """Find a pinned, hash-verified source before allowing a generic download."""
+        control = self._model_download_owner(control)
+        if control.get("state") not in {"idle", "failed", "cancelled"}:
+            return
+        filename = Path(control["target"]).name
+        control["state"] = "resolving"
+        self._set_model_download_status(control, "正在查找同名模型并核验下载来源...")
+
+        def reject(message: str):
+            if control.get("state") != "resolving":
+                return
+            control["state"] = "idle"
+            self._set_model_download_status(control, f"来源未通过核验：{message}")
+
+        def accept(source: dict):
+            if not self._model_download_view_exists(control):
+                control["state"] = "idle"
+                return
+            if control.get("state") not in {"idle", "resolving"}:
+                return
+            self._apply_verified_model_source(control, source)
+            self._start_model_download(control)
+
+        def selected(value):
+            if control.get("state") != "idle":
+                return
+            if isinstance(value, dict):
+                accept(value)
+                return
+            raw_url = str(value or "").strip()
+            if not raw_url or raw_url.startswith("粘贴 Hugging Face"):
+                reject("请填写具体模型文件的 Hugging Face 地址")
+                return
+            control["state"] = "resolving"
+            self._set_model_download_status(control, "正在核对所填来源的文件身份...")
+
+            def verify_manual():
+                try:
+                    source = verify_hf_model_url(raw_url, filename)
+                except Exception as exc:
+                    self.after(0, lambda message=str(exc): reject(message))
+                    return
+                self.after(0, lambda: accept(source))
+
+            threading.Thread(target=verify_manual, daemon=True).start()
+
+        def choose_or_request(candidates: list[dict]):
+            if control.get("state") != "resolving":
+                return
+            if not self._model_download_view_exists(control):
+                control["state"] = "idle"
+                return
+            if len(candidates) == 1:
+                accept(candidates[0])
+                return
+            control["state"] = "idle"
+            control["show_source_choices"](candidates, selected)
+            if candidates:
+                self._set_model_download_status(control, "发现多个同名模型，请核对版本后选择，或粘贴准确地址")
+            else:
+                self._set_model_download_status(control, "目录未收录此模型，请粘贴 Hugging Face 地址或选择本地文件")
+
+        def search():
+            try:
+                declared_url = str((control.get("item") or {}).get("url") or "")
+                suggested_urls = (control.get("item") or {}).get("candidate_urls") or []
+                if declared_url:
+                    # Author-supplied addresses take precedence over an index guess.
+                    candidates = [verify_hf_model_url(declared_url, filename)]
+                elif suggested_urls:
+                    verified = {}
+                    for candidate_url in suggested_urls:
+                        candidate = verify_hf_model_url(candidate_url, filename)
+                        verified.setdefault(candidate["sha256"], candidate)
+                    candidates = list(verified.values())
+                else:
+                    candidates = discover_model_sources(filename)
+            except Exception as exc:
+                self.after(0, lambda message=str(exc): reject(message))
+                self.after(0, lambda: control["show_source_choices"]([], selected)
+                           if self._model_download_view_exists(control) else None)
+                return
+            self.after(0, lambda: choose_or_request(candidates))
+
+        if manual:
+            choose_or_request([])
+        else:
+            threading.Thread(target=search, daemon=True).start()
+
+
+    def _apply_verified_model_source(self, control: dict, source: dict):
+        control["item"] = {
+            **(control.get("item") or {}),
+            "url": source["url"],
+            "size_bytes": source["size_bytes"],
+            "sha256": source["sha256"],
+        }
+        sources = self._model_download_sources(source["url"])
+        control["url"] = sources[0][1]
+        control["urls"] = [url for _label, url in sources]
+        if callable(control.get("set_sources")):
+            control["set_sources"](sources)
+        if callable(control.get("hide_source_choices")):
+            control["hide_source_choices"]()
+        relative_path = str(control["item"].get("path") or "")
+        try:
+            save_verified_source(BASE_DIR / "runtime" / "model_sources.json", relative_path, source)
+        except OSError:
+            self._set_model_download_status(control, "来源已核验，但无法保存来源记录；本次下载仍可继续")
+        control["state"] = "idle"
+        self._refresh_model_download_views(control)
+
 
     def _bind_model_download_mousewheel_tree(self, widget, canvas):
         def on_mousewheel(event):
@@ -3490,15 +3723,16 @@ class GatewayApp(WindowBase):
         progress_percent = float(task.get("progress_percent") or 0.0)
         url_available = bool(str(task.get("url") or "").strip())
         action_state = {
-            "idle": ("normal" if url_available else "disabled", "下载" if url_available else "无地址", "disabled", "暂停", "disabled"),
+            "idle": ("normal", "下载" if url_available else "查找来源", "disabled", "暂停", "disabled"),
+            "resolving": ("disabled", "查找中", "disabled", "暂停", "disabled"),
             "downloading": ("disabled", "下载中", "normal", "暂停", "normal"),
             "paused": ("normal", "继续", "disabled", "暂停", "normal"),
             "resuming": ("disabled", "恢复中", "disabled", "暂停", "normal"),
             "cancelling": ("disabled", "取消中", "disabled", "暂停", "disabled"),
             "abandoning": ("disabled", "结束中", "disabled", "暂停", "disabled"),
             "done": ("disabled", "已完成", "disabled", "暂停", "disabled"),
-            "failed": ("normal" if url_available else "disabled", "重试", "disabled", "暂停", "disabled"),
-            "cancelled": ("normal" if url_available else "disabled", "重新下载", "disabled", "暂停", "disabled"),
+            "failed": ("normal", "重试" if url_available else "填写地址", "disabled", "暂停", "disabled"),
+            "cancelled": ("normal", "重新下载" if url_available else "查找来源", "disabled", "暂停", "disabled"),
         }.get(state, ("disabled", "处理中", "disabled", "暂停", "disabled"))
         main_state, main_text, pause_state, pause_text, cancel_state = action_state
         active_views = []
@@ -3620,7 +3854,10 @@ class GatewayApp(WindowBase):
 
     def _start_model_download(self, control: dict):
         control = self._model_download_owner(control)
-        if control.get("state") in {"downloading", "resuming", "cancelling", "abandoning"}:
+        if control.get("state") in {"downloading", "resuming", "resolving", "cancelling", "abandoning"}:
+            return
+        if (not control.get("urls") or not (control.get("item") or {}).get("sha256") or not (control.get("item") or {}).get("size_bytes")) and control.get("state") != "paused":
+            self._resolve_model_source(control)
             return
         if not self._claim_model_transfer(control):
             self._set_model_download_status(control, "另一个模型维护任务正在运行，请稍候")
@@ -3736,7 +3973,8 @@ class GatewayApp(WindowBase):
         meta_path = part_path.with_suffix(part_path.suffix + ".json")
         expected_size = int((control.get("item") or {}).get("size_bytes") or 0)
         expected_sha256 = str((control.get("item") or {}).get("sha256") or "").strip()
-        max_retries = 3
+        max_retries_without_progress = 5
+        max_retries_per_source = 64
 
         if expected_size <= 0 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
             self.after(
@@ -3767,10 +4005,10 @@ class GatewayApp(WindowBase):
                 return {}
             try:
                 valid = (
-                    str(data.get("url") or "") == url
+                    str(data.get("url") or "") in urls
                     and int(data.get("expected_size") or 0) == expected_size
                     and str(data.get("expected_sha256") or "") == expected_sha256
-                    and bool(str(data.get("validator") or "").strip())
+                    and isinstance(data.get("validator"), str)
                 )
             except (TypeError, ValueError):
                 valid = False
@@ -3785,9 +4023,6 @@ class GatewayApp(WindowBase):
             return str(headers.get("Last-Modified") or "").strip()
 
         def save_resume_metadata(validator: str):
-            if not validator:
-                meta_path.unlink(missing_ok=True)
-                return
             meta_path.write_text(
                 json.dumps(
                     {
@@ -3820,7 +4055,15 @@ class GatewayApp(WindowBase):
                 discard_partial()
             if expected_size and part_path.exists() and part_path.stat().st_size > expected_size:
                 discard_partial()
+            if len(urls) > 1:
+                self.after(0, lambda: self._set_model_download_status(control, "正在测速并选择较快的下载源..."))
+                urls = _rank_model_download_sources(urls, expected_size)
+                if cancelled():
+                    return
+                url = urls[0]
+                control["url"] = url
             attempt = 0
+            source_retries = 0
             while True:
                 if cancelled():
                     return
@@ -3828,6 +4071,10 @@ class GatewayApp(WindowBase):
                 if pause_event and pause_event.is_set():
                     self.after(0, lambda: self._set_model_download_status(control, "已暂停，点击继续可断点续传"))
                     return
+                if part_path.is_file() and model_file_ready(part_path, expected_size):
+                    if model_file_sha256_matches(part_path, expected_sha256):
+                        break
+                    discard_partial()
 
                 resume_metadata = load_resume_metadata()
                 if part_path.exists() and not resume_metadata:
@@ -3836,7 +4083,8 @@ class GatewayApp(WindowBase):
                 headers = {"User-Agent": "lingjing-model-downloader/1.0"}
                 if resume_from:
                     headers["Range"] = f"bytes={resume_from}-"
-                    headers["If-Range"] = str(resume_metadata["validator"])
+                    if resume_metadata.get("url") == url and resume_metadata.get("validator"):
+                        headers["If-Range"] = str(resume_metadata["validator"])
                 req = ur.Request(url, headers=headers)
                 try:
                     with _open_download_request(
@@ -3876,11 +4124,14 @@ class GatewayApp(WindowBase):
                             ):
                                 discard_partial()
                                 raise IOError("服务器返回的模型总大小与清单不一致")
-                            if validator and validator != str(resume_metadata.get("validator") or ""):
+                            if resume_metadata.get("url") == url and validator and resume_metadata.get("validator") and validator != resume_metadata["validator"]:
                                 discard_partial()
                                 raise IOError("下载源文件已发生变化，正在重新下载")
+                            save_resume_metadata(validator)
                             total = int(total_value) if total_value != "*" else 0
                         else:
+                            if status_code != 200:
+                                raise IOError("服务器返回了无效的下载状态")
                             if expected_size and content_length and content_length != expected_size:
                                 discard_partial()
                                 raise IOError(
@@ -3924,29 +4175,32 @@ class GatewayApp(WindowBase):
                 except Exception:
                     if cancelled():
                         return
-                    attempt += 1
-                    if attempt > max_retries:
+                    progressed = part_path.exists() and part_path.stat().st_size > resume_from
+                    attempt = 0 if progressed else attempt + 1
+                    source_retries += 1
+                    if attempt > max_retries_without_progress or source_retries >= max_retries_per_source:
                         source_index += 1
                         if source_index >= len(urls):
                             raise
                         url = urls[source_index]
                         control["url"] = url
-                        discard_partial()
                         attempt = 0
+                        source_retries = 0
                         self.after(
                             0,
                             lambda: self._set_model_download_status(
                                 control,
-                                "国内镜像连接失败，正在切换官方源...",
+                                "当前下载源反复中断，保留断点并切换备用源...",
                             ),
                         )
                         continue
-                    self.after(0, lambda n=attempt: self._set_model_download_status(control, f"网络中断，正在重连 {n}/{max_retries}..."))
+                    self.after(0, lambda n=source_retries: self._set_model_download_status(control, f"网络中断，保留断点并自动重连（第 {n} 次）..."))
                     stop_event = control.get("stop_event")
-                    if stop_event and stop_event.wait(min(2 * attempt, 6)):
+                    delay = min(2 * max(1, attempt), 8)
+                    if stop_event and stop_event.wait(delay):
                         return
                     if not stop_event:
-                        time.sleep(min(2 * attempt, 6))
+                        time.sleep(delay)
             if cancelled():
                 return
             if not model_file_ready(part_path, expected_size or None):
@@ -4192,7 +4446,193 @@ class GatewayApp(WindowBase):
         ])
         return "\n".join(lines)
 
+    def _repair_workflow_automatically(self, workflow_id: str, progress) -> dict:
+        from app.core.workflow_node_repair import install_workflow_nodes
+        wf = self._workflow_registry().get(workflow_id)
+        if wf is None or wf.folder is None:
+            raise ValueError("工作流不存在，请刷新列表")
+        original = self._load_json_file(wf.folder / "frontend_workflow.json")
+        if self._has_active_model_transfers():
+            raise ValueError("请等待当前模型下载或映射完成后再修复节点")
+        if not self._begin_backend_action("修复工作流节点"):
+            raise ValueError("后台正在维护，请稍后重试")
+        reserved = False
+        restore = False
+        try:
+            reserved, running, error = self._reserve_runtime_maintenance()
+            if not reserved or error:
+                raise ValueError(error or "已有运行环境维护任务")
+            reason = self._comfyui_update_live_queue_reason()
+            if reason:
+                raise ValueError(reason)
+            restore = True
+            error = self._stop_api_submission_for_comfyui_update()
+            if error:
+                raise ValueError(error)
+            reason = self._comfyui_update_live_queue_reason()
+            if reason:
+                raise ValueError(reason)
+            progress("暂停 ComfyUI，准备安装节点")
+            error = self._process_supervisor.terminate("comfyui", timeout=15)
+            if error:
+                raise ValueError("无法安全停止 ComfyUI：" + str(error))
+            python, env = self._backend_env()
+            unknown = install_workflow_nodes(
+                BASE_DIR / "runtime" / "ComfyUI", python, original,
+                self._process_supervisor, env, progress, cancelled=lambda: self._shutting_down)
+            if self._shutting_down:
+                raise ValueError("客户端正在退出，工作流仍保留为待修复")
+            progress("节点处理完成，正在重启 ComfyUI")
+            self._run_ui_backend_step(self._start_comfyui_service_unlocked)
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                if self._shutting_down:
+                    raise ValueError("客户端正在退出，修复已停止")
+                try:
+                    import urllib.request as ur
+                    with ur.urlopen(COMFY_BASE + "/object_info", timeout=3) as response:
+                        if response.status == 200:
+                            break
+                except Exception:
+                    pass
+                time.sleep(1)
+            else:
+                raise ValueError("ComfyUI 重启后未就绪，请查看运行日志中的节点加载错误")
+            progress("重新转换工作流并检查输入输出")
+            try:
+                result = self._retry_pending_workflow(workflow_id)
+            except Exception as exc:
+                extra = "；未找到插件来源的节点：" + "、".join(unknown) if unknown else ""
+                raise ValueError(str(exc) + extra) from exc
+            progress("转换完成，正在刷新模型依赖")
+            return result
+        finally:
+            if reserved:
+                self._end_runtime_maintenance(restart=restore)
+            self._end_backend_action()
+
+    def _retry_pending_workflow(self, workflow_id: str) -> dict:
+        registry = self._workflow_registry()
+        wf = registry.get(workflow_id)
+        if wf is None or wf.folder is None:
+            raise ValueError("工作流不存在，请刷新列表")
+        folder = wf.folder
+        source = folder / "frontend_workflow.json"
+        original = self._load_json_file(source)
+        manifest_path = folder / "manifest.json"
+        previous_manifest = manifest_path.read_bytes()
+        manifest = json.loads(previous_manifest)
+        if manifest.get("api_mapping_status") != "pending_conversion":
+            raise ValueError("工作流已完成转换，请刷新列表")
+        graph = self._convert_front_workflow_to_api(original)
+        if not self._is_comfy_api_workflow(graph):
+            raise ValueError("转换未得到有效 API 工作流，原文件已保留")
+        adaptation = self._recognize_workflow(graph, manifest.get("type", ""))
+        repaired = {**manifest, **adaptation, "enabled": True,
+                    "type": self._workflow_manifest_type(adaptation["output_type"]),
+                    "dependencies": normalize_workflow_dependencies({}, graph)}
+        graph_path = folder / "workflow.json"
+        graph_tmp = folder / (".repair-" + uuid.uuid4().hex + ".json")
+        manifest_tmp = folder / (".repair-" + uuid.uuid4().hex + ".json")
+        try:
+            graph_tmp.write_text(json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8")
+            manifest_tmp.write_text(json.dumps(repaired, ensure_ascii=False, indent=2), encoding="utf-8")
+            with registry.locked_mutation():
+                if manifest_path.read_bytes() != previous_manifest:
+                    raise ValueError("工作流已被其他操作修改，请刷新后重试")
+                old_graph = graph_path.read_bytes() if graph_path.exists() else None
+                try:
+                    os.replace(graph_tmp, graph_path)
+                    os.replace(manifest_tmp, manifest_path)
+                    registry._scan_folder_unlocked(save=False)
+                    repaired_workflow = registry.get(workflow_id)
+                    if repaired_workflow is None:
+                        raise ValueError("修复后的工作流注册失败")
+                    repaired_workflow.enabled = True
+                    registry._repair_default_unlocked()
+                    records = self._workflow_records_from_registry(registry)
+                    default_id = str(registry.default_workflow_id or "")
+                    registry._save_unlocked()
+                except Exception:
+                    manifest_tmp.write_bytes(previous_manifest)
+                    os.replace(manifest_tmp, manifest_path)
+                    if old_graph is None:
+                        graph_path.unlink(missing_ok=True)
+                    else:
+                        graph_tmp.write_bytes(old_graph)
+                        os.replace(graph_tmp, graph_path)
+                    registry._load_unlocked()
+                    raise
+            return {"id": wf.id, "name": wf.name, "adaptation": adaptation,
+                    "output_type": adaptation["output_type"], "target": str(folder),
+                    "workflows": records, "default_workflow_id": default_id}
+        finally:
+            graph_tmp.unlink(missing_ok=True)
+            manifest_tmp.unlink(missing_ok=True)
+
+    def _show_workflow_repair(self, workflow: dict):
+        popup = tk.Toplevel(self)
+        popup.title("修复工作流")
+        popup.configure(bg=C["bg"])
+        self._center_popup(popup, 720, 510)
+        tk.Label(popup, text="待修复 · " + self._workflow_display_name(workflow),
+                 font=F["title"], fg=C["muted"], bg=C["bg"]).pack(anchor="w", padx=20, pady=16)
+        detail = tk.Text(popup, wrap="word", height=15, font=F["normal"])
+        detail.pack(fill="both", expand=True, padx=20)
+        dependencies = workflow.get("dependencies") or {}
+        nodes = "、".join(str(n) for n in dependencies.get("nodes", []))
+        message = ("原始工作流已保存，修复后会更新当前条目，无需重复导入。\n\n"
+                   + str(workflow.get("api_mapping_error") or "转换未完成")
+                   + "\n\n所需节点（含内置节点）：\n" + (nodes or "尚未识别")
+                   + "\n\n点击一键修复后，程序会在后台匹配并安装节点插件和依赖、重启 ComfyUI，再重新转换工作流。\n"
+                   + "模型文件可通过下载 / 映射模型按钮补齐。\n"
+                   + "无法识别的节点或安装错误会列在这里；原文件和待修复条目会保留。")
+        detail.insert("1.0", message)
+        detail.configure(state="disabled")
+        actions = tk.Frame(popup, bg=C["bg"])
+        actions.pack(fill="x", padx=20, pady=16)
+        def open_source():
+            wf = self._workflow_registry().get(str(workflow.get("id") or ""))
+            if wf and wf.folder:
+                os.startfile(str(wf.folder))
+        self._button(actions, "原始文件", open_source, "plain", width=80).pack(side="left", padx=6)
+        self._button(actions, "下载 / 映射模型", lambda: self._show_workflow_model_help(workflow),
+                     "plain", width=126).pack(side="left")
+        def retry():
+            if not self._begin_workflow_operation("修复工作流"):
+                return
+            retry_button.configure(state="disabled", text="正在检测…")
+            def worker():
+                try:
+                    def report(stage):
+                        def update():
+                            if popup.winfo_exists():
+                                detail.configure(state="normal")
+                                detail.insert("end", "\n" + stage)
+                                detail.see("end")
+                                detail.configure(state="disabled")
+                        self._post_to_ui(update)
+                    result = self._repair_workflow_automatically(str(workflow.get("id") or ""), report)
+                    self._post_to_ui(lambda: self._finish_workflow_import(result, popup))
+                except Exception as exc:
+                    def failed(message=str(exc)):
+                        if not popup.winfo_exists():
+                            return
+                        retry_button.configure(state="normal", text="一键修复")
+                        detail.configure(state="normal")
+                        detail.insert("end", "\n\n本次修复未完成：" + message)
+                        detail.see("end")
+                        detail.configure(state="disabled")
+                    self._post_to_ui(failed)
+                finally:
+                    self._end_workflow_operation()
+            threading.Thread(target=worker, daemon=True).start()
+        retry_button = self._button(actions, "一键修复", retry, "primary", width=138)
+        retry_button.pack(side="right")
+
     def _show_workflow_schema(self, workflow: dict):
+        if workflow.get("api_mapping_status") == "pending_conversion":
+            return self._show_workflow_repair(workflow)
         text = self._format_workflow_detail_text(workflow)
         title = self._workflow_display_name(workflow)
         model_key = self._workflow_model_key(workflow)
@@ -4409,7 +4849,15 @@ class GatewayApp(WindowBase):
                 raise ValueError("工作流节点过多（最多 10000 个）")
             if not self._is_comfy_api_workflow(data):
                 if "nodes" in data and "links" in data:
-                    data = self._convert_front_workflow_to_api(data)
+                    try:
+                        data = self._convert_front_workflow_to_api(data)
+                    except ValueError as exc:
+                        if self._shutting_down:
+                            raise
+                        # Keep an editor workflow for repair, never as executable API JSON.
+                        manifest = {**manifest, "api_mapping_status": "pending_conversion",
+                                    "api_mapping_error": str(exc)[:1500]}
+                        return source_root, workflow_json, data, manifest, cleanup_root
                     print(f"[Workflow] Converted frontend workflow to API format: {workflow_json}")
                 else:
                     raise ValueError("这个 JSON 看起来不是 ComfyUI API 工作流。")
@@ -4457,7 +4905,12 @@ class GatewayApp(WindowBase):
             base_name = str(manifest.get("id") or source_stem or Path(source_path).stem)
             workflow_id = self._unique_workflow_id(base_name)
             output_type = self._infer_workflow_output_type(workflow_json.stem, data, manifest)
-            if manifest.get("api_mapping_status") == "ready":
+            pending = manifest.get("api_mapping_status") == "pending_conversion"
+            if pending:
+                adaptation = {"output_type": output_type, "input_schema": {},
+                              "api_mapping_status": "pending_conversion",
+                              "api_mapping_error": manifest.get("api_mapping_error", "等待修复")}
+            elif manifest.get("api_mapping_status") == "ready":
                 adaptation = make_mapping(data, mapping_fields(manifest), output_type)
             else:
                 adaptation = self._recognize_workflow(data, manifest.get("type", ""))
@@ -4484,7 +4937,9 @@ class GatewayApp(WindowBase):
             if self._shutting_down:
                 raise RuntimeError("客户端正在退出，已取消工作流导入")
 
-            with open(staging_dir / "workflow.json", "w", encoding="utf-8") as f:
+            if pending:
+                (staging_dir / "workflow.json").unlink(missing_ok=True)
+            with open(staging_dir / ("frontend_workflow.json" if pending else "workflow.json"), "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
             input_schema = adaptation["input_schema"]
@@ -4497,12 +4952,12 @@ class GatewayApp(WindowBase):
                 **adaptation,
                 "id": workflow_id,
                 "name": workflow_name,
-                "type": self._workflow_manifest_type(output_type),
+                "type": "unknown" if pending else self._workflow_manifest_type(output_type),
                 "engine": "comfyui",
-                "enabled": bool(manifest.get("enabled", True)),
+                "enabled": False if pending else bool(manifest.get("enabled", True)),
                 "version": str(manifest.get("version") or "1.0.0")[:50],
                 "description": str(
-                    manifest.get("description") or self._workflow_description_for_type(output_type)
+                    manifest.get("description") or ("原始工作流已保存，等待补齐依赖并完成转换" if pending else self._workflow_description_for_type(output_type))
                 )[:500],
                 "input_schema": input_schema,
                 "dependencies": dependencies,
@@ -4614,6 +5069,10 @@ class GatewayApp(WindowBase):
 
     def _show_workflow_import_result(self, result: dict):
         adaptation = result.get("adaptation") or {}
+        if adaptation.get("api_mapping_status") == "pending_conversion":
+            record = next((item for item in result.get("workflows", []) if item.get("id") == result.get("id")), result)
+            self._show_workflow_repair(record)
+            return
         if adaptation.get("api_mapping_status") == "needs_review":
             messagebox.showwarning("需要手动填写参数", adaptation.get("api_mapping_error", "识别未完成"), parent=self)
             self._show_workflow_mapping_editor(result)
@@ -7290,6 +7749,8 @@ class GatewayApp(WindowBase):
         return "image"
 
     def _workflow_model_available(self, workflow: dict) -> bool:
+        if workflow.get("api_mapping_status") == "pending_conversion":
+            return False
         if "available" in workflow:
             return bool(workflow.get("available"))
         dependencies = workflow.get("dependencies")

@@ -30,6 +30,7 @@ AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
 AppComments=轻量客户端；首次打开后可安装或导入独立 AI 运行环境包
 DefaultDirName={localappdata}\Programs\LingJingAI
+DisableDirPage=no
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible

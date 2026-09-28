@@ -234,6 +234,11 @@ class BundledVideoWorkflowTests(unittest.TestCase):
         for path in manifests:
             with self.subTest(manifest=path.parent.name):
                 manifest = _read_json(path)
+                if manifest.get("api_mapping_status") == "pending_conversion":
+                    self.assertFalse(manifest.get("enabled"))
+                    self.assertTrue((path.parent / "frontend_workflow.json").is_file())
+                    self.assertFalse((path.parent / "workflow.json").exists())
+                    continue
                 model_group = str(manifest.get("model_group") or "").strip()
                 if model_group:
                     self.assertIn(model_group, MODEL_REQUIREMENTS)

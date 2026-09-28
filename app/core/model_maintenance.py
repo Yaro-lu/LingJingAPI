@@ -40,6 +40,78 @@ COMFY_MODEL_FOLDERS = {
 # client reject HTML error pages and interrupted downloads without hashing
 # tens of gigabytes on every startup.
 MODEL_REQUIREMENTS = {
+    "H3 Regular": {
+        "title": "性价比 H3 图生视频模型",
+        "performance": {
+            "level": "高负载视频",
+            "minimum": "8GB 显存与足够的系统内存、磁盘空间；需模型卸载",
+            "recommended": "12GB+ 显存、32GB+ 内存",
+            "preset": "先用短片段与较低分辨率验证",
+            "notes": "模型文件体积较大；实际能否在 8GB 显卡运行取决于 ComfyUI 卸载与系统内存。",
+        },
+        "items": [
+            {
+                "path": "vae/minimax_h3_video_vae_int8_convrot.safetensors",
+                "url": "https://huggingface.co/Kijai/MiniMax-H3-experimental/resolve/e042fe480f58806578713532b8ae4e3d47d1bd63/minimax_h3_video_vae_int8_convrot.safetensors",
+                "size_bytes": 3_171_670_912,
+                "sha256": "9bb2d96f218c76babd85e0611b85ca8fb330a90546c01a0005e8a58a59593410",
+            },
+            {
+                "path": "vae/minimax_h3_audio_vae_fp32.safetensors",
+                "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/bf92c4091e333e69b8ca1998e0a669f15cb0832b/vae/minimax_h3_audio_vae_fp32.safetensors",
+                "size_bytes": 605_254_808,
+                "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+            },
+            {
+                "path": "diffusion_models/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors",
+                "url": "https://huggingface.co/Kijai/MiniMax-H3-experimental/resolve/e042fe480f58806578713532b8ae4e3d47d1bd63/minimax_h3_fl2va_pruned_w4a8_mixed.safetensors",
+                "size_bytes": 12_540_858_008,
+                "sha256": "01aa7b92c007c599890461c325f9b7e3c96fb06c36f242f95b62f7f20e538dec",
+            },
+            {
+                "path": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/bf92c4091e333e69b8ca1998e0a669f15cb0832b/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "size_bytes": 15_687_142_551,
+                "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+            },
+        ],
+    },
+    "H3 High Quality": {
+        "title": "高质量 H3 图生视频模型",
+        "performance": {
+            "level": "高负载视频",
+            "minimum": "12GB+ 显存与足够的系统内存、磁盘空间；需模型卸载",
+            "recommended": "16GB+ 显存、48GB+ 内存",
+            "preset": "先用短片段与较低分辨率验证",
+            "notes": "模型文件体积较大，实际资源占用以本机运行情况为准。",
+        },
+        "items": [
+            {
+                "path": "vae/minimax_h3_video_vae_fp16.safetensors",
+                "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/bf92c4091e333e69b8ca1998e0a669f15cb0832b/vae/minimax_h3_video_vae_fp16.safetensors",
+                "size_bytes": 5_207_808_496,
+                "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522",
+            },
+            {
+                "path": "vae/minimax_h3_audio_vae_fp32.safetensors",
+                "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/bf92c4091e333e69b8ca1998e0a669f15cb0832b/vae/minimax_h3_audio_vae_fp32.safetensors",
+                "size_bytes": 605_254_808,
+                "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48",
+            },
+            {
+                "path": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+                "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/bf92c4091e333e69b8ca1998e0a669f15cb0832b/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+                "size_bytes": 20_970_379_616,
+                "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a",
+            },
+            {
+                "path": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/bf92c4091e333e69b8ca1998e0a669f15cb0832b/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                "size_bytes": 15_687_142_551,
+                "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6",
+            },
+        ],
+    },
     "Qwen3.5": {
         "title": "Qwen3.5 文字模型",
         "performance": {

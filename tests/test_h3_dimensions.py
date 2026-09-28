@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def h3_fixture():
-    folder = ROOT / "workflows/video_minimax_h3_i2v"
+    folder = ROOT / "workflows-archive/2026-09-28-h3-replaced/video_minimax_h3_i2v"
     return (json.loads((folder / "workflow.json").read_text(encoding="utf-8")),
             json.loads((folder / "manifest.json").read_text(encoding="utf-8")))
 

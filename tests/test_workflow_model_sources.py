@@ -8,6 +8,7 @@ from app.core.model_mappings import register_mapping, read_mappings, extra_searc
 from app.core.model_maintenance import model_file_ready, check_model_groups
 from app.core.workflow_dependencies import workflow_dependency_report, clear_model_index_cache
 from app.core.workflow_model_sources import workflow_model_items
+from app.core.model_source_discovery import save_verified_source
 from app.gui import main_gateway
 
 
@@ -17,6 +18,28 @@ class WorkflowModelSourceTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.addCleanup(clear_model_index_cache)
+
+    def test_saved_source_is_reused_for_unknown_group_without_network(self):
+        source = {'url': 'https://huggingface.co/a/b/resolve/'+'a'*40+'/model.safetensors', 'size_bytes': 42, 'sha256': 'b'*64}
+        save_verified_source(self.base/'runtime/model_sources.json', 'vae/model.safetensors', source)
+        items = workflow_model_items({'dependencies': {'models': [{'name': 'model.safetensors', 'node': 'VAELoader', 'input': '0'}]}}, self.base)
+        self.assertEqual(items[0]['sha256'], source['sha256'])
+        self.assertEqual(items[0]['path'], 'vae/model.safetensors')
+
+    def test_conflicting_catalog_versions_remain_candidates(self):
+        groups = {'a': {'items': [{'path': 'vae/model.safetensors', 'url': 'https://huggingface.co/a/a/resolve/main/model.safetensors'}]},
+                  'b': {'items': [{'path': 'vae/model.safetensors', 'url': 'https://huggingface.co/b/b/resolve/main/model.safetensors'}]}}
+        with mock.patch('app.core.workflow_model_sources.MODEL_REQUIREMENTS', groups):
+            items = workflow_model_items({'dependencies': {'models': [{'name': 'model.safetensors', 'input': 'vae_name'}]}}, self.base)
+        self.assertEqual(items[0]['url'], '')
+        self.assertEqual(len(items[0]['candidate_urls']), 2)
+
+    def test_editor_graph_without_registered_group_extracts_model_and_author_address(self):
+        graph = {'nodes': [{'type': 'VAELoader', 'widgets_values': ['model.safetensors'],
+                           'properties': {'models': [{'name': 'model.safetensors', 'directory': 'vae',
+                                                     'url': 'https://huggingface.co/author/repo/resolve/main/model.safetensors'}]}}]}
+        result = workflow_model_items({'dependencies': {'models': []}}, self.base, graph)
+        self.assertEqual(result, [{'path': 'vae/model.safetensors', 'url': 'https://huggingface.co/author/repo/resolve/main/model.safetensors'}])
 
     def test_template_subgraph_metadata_resolves_custom_workflow(self):
         template_dir = self.base / 'runtime/python/Lib/site-packages/comfyui_workflow_templates_json/templates'

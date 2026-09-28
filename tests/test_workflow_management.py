@@ -47,6 +47,48 @@ class WorkflowManagementTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def test_failed_editor_conversion_is_durable_and_repair_reuses_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            (base / "workflows").mkdir()
+            source = base / "my-editor.json"
+            editor = {"nodes": [{"id": 1, "type": "CheckpointLoaderSimple", "widgets_values": ["example.safetensors"]}], "links": []}
+            source.write_text(json.dumps(editor), encoding="utf-8")
+            app = self._app()
+            app._convert_front_workflow_to_api = mock.Mock(side_effect=ValueError("缺少节点：Example"))
+            with mock.patch.object(main_gateway, "BASE_DIR", base):
+                result = app._install_workflow_from_path(source)
+                folder = Path(result["target"])
+                self.assertFalse((folder / "workflow.json").exists())
+                self.assertEqual(json.loads((folder / "frontend_workflow.json").read_text(encoding="utf-8")), editor)
+                registry = app._workflow_registry()
+                pending = registry.get(result["id"])
+                self.assertFalse(pending.enabled)
+                self.assertIsNone(registry.resolve(result["id"]))
+                self.assertEqual(pending.api_mapping["api_mapping_status"], "pending_conversion")
+                self.assertEqual(pending.dependencies["models"][0]["name"], "example.safetensors")
+                with self.assertRaises(ValueError):
+                    registry.set_enabled(result["id"], True)
+                before = (folder / "manifest.json").read_bytes()
+                with self.assertRaises(ValueError):
+                    app._retry_pending_workflow(result["id"])
+                self.assertEqual((folder / "manifest.json").read_bytes(), before)
+                app._convert_front_workflow_to_api.side_effect = None
+                app._convert_front_workflow_to_api.return_value = VALID_WORKFLOW
+                with mock.patch.object(WorkflowRegistry, "_save_unlocked", side_effect=OSError("disk full")):
+                    with self.assertRaises(OSError):
+                        app._retry_pending_workflow(result["id"])
+                self.assertEqual((folder / "manifest.json").read_bytes(), before)
+                self.assertFalse((folder / "workflow.json").exists())
+                repaired = app._retry_pending_workflow(result["id"])
+                self.assertEqual(repaired["id"], result["id"])
+                latest = app._workflow_registry()
+                self.assertEqual(len(latest.workflows), 1)
+                self.assertTrue(latest.get(result["id"]).enabled)
+                self.assertNotEqual(latest.get(result["id"]).api_mapping.get("api_mapping_status"), "pending_conversion")
+                self.assertEqual(json.loads((folder / "workflow.json").read_text(encoding="utf-8")), VALID_WORKFLOW)
+                self.assertTrue((folder / "frontend_workflow.json").exists())
+
     def test_install_registers_workflow_and_preserves_existing_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)

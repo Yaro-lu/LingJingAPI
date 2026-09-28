@@ -93,6 +93,20 @@ def extract_workflow_dependencies(workflow: dict) -> dict:
     if not isinstance(workflow, dict):
         return {"models": [], "nodes": []}
 
+    if isinstance(workflow.get("nodes"), list):
+        nodes_to_scan = list(workflow["nodes"])
+        definitions = workflow.get("definitions") or {}
+        if isinstance(definitions, dict):
+            for subgraph in (definitions.get("subgraphs") or [])[:_MAX_DEPENDENCIES]:
+                if isinstance(subgraph, dict):
+                    nodes_to_scan.extend(subgraph.get("nodes") or [])
+        workflow = {
+            str(index): {"class_type": node.get("type"),
+                         "inputs": {str(i): value for i, value in enumerate(node.get("widgets_values") or [])}}
+            for index, node in enumerate(nodes_to_scan[:_MAX_DEPENDENCIES])
+            if isinstance(node, dict) and isinstance(node.get("widgets_values", []), list)
+        }
+
     for raw_node in list(workflow.values())[:_MAX_DEPENDENCIES]:
         if not isinstance(raw_node, dict):
             continue

@@ -1830,12 +1830,13 @@
           select.add(new Option(title, size));
         }
         select.addEventListener("change", () => {
+          manualSizing = true;
           if (select.value === "reference") { updateReferenceSize(); return; }
           width.input.disabled = height.input.disabled = false;
           const values = select.value ? select.value.split("x") : ["", ""];
           width.input.value = values[0]; height.input.value = values[1];
         });
-        for (const control of [width, height]) control.input.addEventListener("input", () => { select.value = ""; });
+        for (const control of [width, height]) control.input.addEventListener("input", () => { manualSizing = true; select.value = ""; });
         width.wrapper.hidden = true; height.wrapper.hidden = true;
         width.input.setAttribute("aria-label", "宽度（像素）"); height.input.setAttribute("aria-label", "高度（像素）");
         width.input.placeholder = "宽"; height.input.placeholder = "高";
@@ -1846,30 +1847,39 @@
         const referenceSizing = model.input_schema.reference_sizing;
         const imageControls = state.controls.filter(control=>control.field.type === "image" && (!referenceSizing?.image_field || control.field.name === referenceSizing.image_field));
         const isFluxEdit = model.id === "flux2_klein_4b_v1";
-        const autoReference = isFluxEdit || referenceSizing?.default_to_reference;
+        const isImageVideo = (model.output_type === "video" || model.input_schema.response?.type === "video") && imageControls.length > 0;
+        const autoReference = isFluxEdit || referenceSizing?.default_to_reference || isImageVideo;
+        let manualSizing = false;
+        if (isImageVideo || referenceSizing?.default_to_reference) {
+          referenceOption.disabled = false;
+          select.value = "reference";
+        }
         function updateReferenceSize() {
-          state.referenceSizePending = applyReferenceSize();
-          state.referenceSizePending.catch(error=>showToast(error.message,true));
+          state.referenceSizePending = applyReferenceSize().catch(()=>showToast("无法读取参考图尺寸，保留当前有效尺寸",true));
         }
         async function applyReferenceSize() {
           const file = imageControls.find(control=>control.input.files?.[0])?.input.files[0];
           if(!file) return;
           width.input.disabled = height.input.disabled = isFluxEdit;
-          if(typeof createImageBitmap === "undefined") { if(referenceSizing?.default_to_reference) {width.input.value="";height.input.value="";} return; }
+          if(typeof createImageBitmap === "undefined") return;
           const bitmap = await createImageBitmap(file);
           if(select.value !== "reference" || !imageControls.some(control=>control.input.files?.[0] === file)) {bitmap.close();return;}
           const sizing = model.input_schema.reference_sizing;
-          const scale = sizing ? Math.sqrt(sizing.megapixels*1024*1024/(bitmap.width*bitmap.height)) : 1;
-          const step = sizing?.step || 1;
-          width.input.value=String(Math.max(step,Math.round(bitmap.width*scale/step)*step));
-          height.input.value=String(Math.max(step,Math.round(bitmap.height*scale/step)*step)); bitmap.close();
+          const budget = Number(sizing?.megapixels)*1024*1024 || Number(width.field.default)*Number(height.field.default);
+          const scale = (sizing || isImageVideo) && budget > 0 ? Math.sqrt(budget/(bitmap.width*bitmap.height)) : 1;
+          const widthStep = Number(sizing?.step) || Number(width.field.step) || 1;
+          const heightStep = Number(sizing?.step) || Number(height.field.step) || 1;
+          if (!Number.isFinite(scale) || scale <= 0 || !bitmap.width || !bitmap.height) {bitmap.close();return;}
+          width.input.value=String(Math.max(widthStep,Math.round(bitmap.width*scale/widthStep)*widthStep));
+          height.input.value=String(Math.max(heightStep,Math.round(bitmap.height*scale/heightStep)*heightStep)); bitmap.close();
         }
         for(const reference of imageControls) reference.input.addEventListener("change",()=>{
           const hasImage=imageControls.some(control=>control.input.files?.length);
-          referenceOption.disabled=!hasImage;
-          if(hasImage && (autoReference || select.value === "reference")) {select.value="reference";updateReferenceSize();}
+          referenceOption.disabled=!(hasImage || isImageVideo || referenceSizing?.default_to_reference);
+          if(hasImage && (isFluxEdit || (!manualSizing && autoReference) || select.value === "reference")) {select.value="reference";updateReferenceSize();}
           else if(!hasImage && select.value === "reference") {
-            select.value=defaultSize; width.input.value=String(width.field.default || ""); height.input.value=String(height.field.default || "");
+            select.value=(isImageVideo || referenceSizing?.default_to_reference) ? "reference" : defaultSize;
+            if(width.field.default && height.field.default) {width.input.value=String(width.field.default);height.input.value=String(height.field.default);}
             width.input.disabled=height.input.disabled=false;
           }
           if(isFluxEdit) for(const option of Array.from(select.options || select.children)) option.disabled=option.value === "reference" ? !hasImage : hasImage;

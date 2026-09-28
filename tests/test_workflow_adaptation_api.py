@@ -53,6 +53,29 @@ class WorkflowAdaptationAPITests(unittest.IsolatedAsyncioTestCase):
         node = FakeComfyUIClient.queued_workflows[-1]["105:104"]["inputs"]
         self.assertEqual((node["width"], node["height"]), (640, 640))
 
+    async def test_bundled_h3_literal_dimensions_keep_reference_policy_through_api(self):
+        from pathlib import Path
+        from PIL import Image
+        folder = Path(__file__).resolve().parents[1] / 'workflows/lingjing_h3_3060ti_regular_it2v'
+        manifest = json.loads((folder/'manifest.json').read_text('utf-8'))
+        workflow = server.registry.workflows[0]
+        (workflow.folder/'workflow.json').write_bytes((folder/'workflow.json').read_bytes())
+        workflow.api_mapping = {key: manifest[key] for key in MAPPING_KEYS}
+        workflow.input_schema = manifest['input_schema']
+        workflow.output_type = 'video'
+        workflow.workflow_type = 'video.image_to_video'
+        status, _, raw = await asgi_request(self.app, 'GET', f'/v1/workflows/{workflow.id}/schema', headers=self.auth)
+        self.assertEqual(status, 200)
+        schema = json.loads(raw)['input_schema']
+        self.assertTrue(schema['reference_sizing']['default_to_reference'])
+        data = io.BytesIO()
+        Image.new('RGB', (800, 800)).save(data, format='PNG')
+        status, _, raw = await asgi_request(self.app, 'POST', f'/v1/workflows/run/{workflow.id}', headers=self.auth,
+            json_body={'prompt': 'test', 'image': 'data:image/png;base64,'+base64.b64encode(data.getvalue()).decode()})
+        self.assertEqual(status, 200, raw)
+        node = FakeComfyUIClient.queued_workflows[-1]['105:104']['inputs']
+        self.assertEqual((node['width'], node['height']), (640, 640))
+
     def install_mapping(self, fields=None):
         workflow = server.registry.workflows[0]
         graph = example_graph()

@@ -291,16 +291,26 @@ const api = context.window.LingJingExample;
     inputs:[{name:'width',type:'integer',default:480},{name:'height',type:'integer',default:864},
       {name:'image',type:'image'},{name:'last_image',type:'image'}]}});
   const h3Select=nodes.get('dynamicInputs').children[1].children[0].children[1].children[0];
-  assert.equal(h3Select.value,'480x864');
+  assert.equal(h3Select.value,'reference');
   control('image').input.files=[{}]; control('image').input.listeners.change();
   await hooks.state.referenceSizePending;
   assert.equal(h3Select.value,'reference');
   assert.equal(control('width').input.value,'640');
   assert.equal(control('height').input.value,'640');
   control('image').input.files=[]; control('image').input.listeners.change();
-  assert.equal(h3Select.value,'480x864');
+  assert.equal(h3Select.value,'reference');
   assert.equal(control('width').input.value,'480');
   assert.equal(control('height').input.value,'864');
+  // Manual fixed/custom sizing survives subsequent uploads.
+  h3Select.value='1024x576'; h3Select.listeners.change();
+  control('image').input.files=[{}]; control('image').input.listeners.change();
+  assert.equal(h3Select.value,'1024x576');
+  assert.equal(control('width').input.value,'1024');
+  h3Select.value='reference';
+  context.createImageBitmap=async()=>{throw new Error('decode failed');};
+  h3Select.listeners.change(); await hooks.state.referenceSizePending;
+  assert.equal(control('width').input.value,'1024');
+  assert.equal(control('height').input.value,'576');
   delete context.createImageBitmap;
   hooks.renderDynamicInputs({output_type:'video',input_schema:{inputs:[
     {name:'image',type:'image',options:['old-server-image.png'],required:true},

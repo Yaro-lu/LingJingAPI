@@ -742,6 +742,8 @@ class WorkflowRegistry:
             wf = self.get(wf_id)
             if not wf:
                 return False
+            if enabled and wf.api_mapping.get("api_mapping_status") == "pending_conversion":
+                raise ValueError("工作流待修复，请先完成转换")
             wf.enabled = _as_bool(enabled)
             self._repair_default_unlocked()
             self._save_unlocked()
