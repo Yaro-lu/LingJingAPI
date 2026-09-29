@@ -19,14 +19,14 @@ Two typical uses:
 
 ## First-time setup: four steps
 
-Version `2.0.3`: get the program installer from this repository's Releases page and install it on a Windows machine with an NVIDIA GPU. You can choose the installation directory. The program and runtime are distributed separately; the installer **does not include model weights**.
+Version `2.0.4`: get the program installer from this repository's Releases page and install it on a Windows machine with an NVIDIA GPU. You can choose the installation directory. The program and runtime are distributed separately; the installer **does not include model weights**.
 
 1. **Launch the program.** On first launch, the environment installation and repair window appears.
 2. **Click one-click repair.** The program selects the “above 12 GB” or “12 GB and below” profile from detected VRAM. Confirm the choice, then wait while it downloads and verifies the runtime and text, image and video models, and starts the services. Existing models are reused.
 
 ![Environment installation and repair on first launch](https://raw.githubusercontent.com/Yaro-lu/LingJingAPI/main/docs/images/2.0/quick-repair.png)
 
-*This screenshot is from the 2.0.3 installer. The source has since removed the old “local mode” badge and platform sign-in; the installed UI will catch up in the next release.*
+*This screenshot was taken in 2.0.3. Version 2.0.4 removes the old mode badge and platform sign-in; the repair flow is unchanged.*
 
 3. **Copy connection details.** Get the URL and API Key from the control panel. Use the local URL on the GPU machine, the LAN URL on other devices in the same network, or the public URL when connected from elsewhere. Keep the API Key private.
 4. **Generate.** Open that URL in a computer or phone browser, enter the API Key, choose an available workflow, and provide a prompt or reference image.

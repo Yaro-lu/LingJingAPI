@@ -157,13 +157,14 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertGreater(rescan_index, smoke_index)
 
     def test_readme_documents_separate_program_environment_and_models(self):
-        for marker in ("轻量客户端", "独立运行环境包", "不包含模型"):
+        for marker in ("程序与运行环境分开发布", "安装包**不含模型**", "一键修复"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.readme)
 
     def test_readme_omits_download_links_and_matches_current_version(self):
         self.assertNotIn("releases/download/", self.readme)
-        self.assertIn(f"当前版本：`{self.version}`", self.readme)
+        self.assertIn(f"当前版本为 `{self.version}`", self.readme)
+        self.assertIn(f"Version `{self.version}`", self.readme_en)
 
     def test_project_declares_apache_2_and_stages_the_license(self):
         self.assertTrue(self.license_path.is_file())
