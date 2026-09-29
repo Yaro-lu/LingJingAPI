@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from app.core import quick_repair
+from app.gui import main_gateway
 from app.gui.main_gateway import GatewayApp
 
 
@@ -118,6 +119,44 @@ class QuickRepairStartupTests(unittest.TestCase):
         app._offer_quick_repair(True, 16 * 1024)
         app._show_quick_repair_dialog.assert_not_called()
 
+    def test_missing_image_and_video_models_do_not_show_startup_prompt(self):
+        app = self._app()
+        app._model_status.update({"Flux2 Klein 4B": "缺失", "H3 Regular": "缺失"})
+        app._offer_quick_repair(True, 16 * 1024)
+        app._show_quick_repair_dialog.assert_not_called()
+
+    def test_missing_qwen_model_shows_startup_prompt(self):
+        app = self._app()
+        app._model_status["Qwen3.5"] = "缺失"
+        app._offer_quick_repair(True, 16 * 1024)
+        app._show_quick_repair_dialog.assert_called_once()
+
+    def test_startup_model_scan_includes_only_qwen(self):
+        with (
+            mock.patch.object(main_gateway, "_models_dir", return_value=Path("models")),
+            mock.patch.object(main_gateway, "check_model_groups", return_value={"Qwen3.5": "完整"}) as check,
+        ):
+            self.assertEqual(main_gateway._check_startup_text_model_status(), {"Qwen3.5": "完整"})
+        self.assertEqual(tuple(check.call_args.args[1]), ("Qwen3.5",))
+
+    def test_model_maintenance_page_is_built_and_fully_checked_on_open(self):
+        app = self._app()
+        app._pages = {"overview": mock.Mock()}
+        app._page_host = mock.Mock()
+        app._current_page_id = "overview"
+        app._dashboard_pages = mock.Mock()
+        app._nav_buttons = {"resources": mock.Mock()}
+        app._page_title_label = mock.Mock()
+        app._page_subtitle_label = mock.Mock()
+        app._model_status_full_checked = False
+        app._start_background_model_recheck = mock.Mock()
+
+        app._show_page("resources")
+
+        app._dashboard_pages.build.assert_called_once_with(app._page_host, "resources")
+        app._start_background_model_recheck.assert_called_once_with()
+        self.assertTrue(app._model_status_full_checked)
+
     def test_missing_environment_shows_prompt_once(self):
         app = self._app()
         app._offer_quick_repair(False, 16 * 1024)
@@ -127,8 +166,16 @@ class QuickRepairStartupTests(unittest.TestCase):
     def test_pending_repair_resumes_even_if_prompt_was_dismissed(self):
         app = self._app()
         app._quick_repair_state = {"dismissed": True, "pending_profile": "at_most_12gb"}
+        app._model_status["Qwen3.5"] = "缺失"
         app._offer_quick_repair(True, 16 * 1024)
         self.assertTrue(app._show_quick_repair_dialog.call_args.kwargs["auto_resume"])
+
+    def test_pending_image_video_repair_does_not_prompt_when_qwen_and_environment_are_ready(self):
+        app = self._app()
+        app._quick_repair_state = {"dismissed": False, "pending_profile": "at_most_12gb"}
+        app._model_status["H3 High Quality"] = "缺失"
+        app._offer_quick_repair(True, 8 * 1024)
+        app._show_quick_repair_dialog.assert_not_called()
 
     def test_transient_model_failure_retries_automatically_with_same_control(self):
         app = self._app()

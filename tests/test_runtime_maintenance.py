@@ -702,10 +702,8 @@ class RuntimeMaintenanceTests(unittest.TestCase):
 
         model_status = {
             "Qwen3.5": "缺失",
-            "Flux2": "缺失",
-            "Wan2.1": "缺失",
             "all_ok": False,
-            "missing": {"Qwen3.5": [], "Flux2": [], "Wan2.1": []},
+            "missing": {"Qwen3.5": []},
         }
         with (
             mock.patch.object(main_gateway, "missing_runtime_paths", return_value=[]),
@@ -719,11 +717,13 @@ class RuntimeMaintenanceTests(unittest.TestCase):
                 "_check_torch",
                 return_value={"success": True, "gpu_name": "fixture"},
             ),
-            mock.patch.object(main_gateway, "_check_models_status", return_value=model_status),
+            mock.patch.object(main_gateway, "_check_startup_text_model_status", return_value=model_status),
+            mock.patch.object(main_gateway, "_check_models_status") as full_model_check,
             mock.patch.object(main_gateway, "_ensure_extra_model_paths"),
         ):
             app._startup_sequence()
 
+        full_model_check.assert_not_called()
         self.assertFalse(app._environment_status["ready"])
         app._start_backend.assert_not_called()
         self.assertIn(

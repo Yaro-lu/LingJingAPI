@@ -19,9 +19,9 @@ Two typical uses:
 
 ## First-time setup: four steps
 
-Version `2.0.6`: get the program installer from this repository's Releases page and install it on a Windows machine with an NVIDIA GPU. You can choose the installation directory. The program and runtime are distributed separately; the installer **does not include model weights**.
+Version `2.0.7`: get the program installer from this repository's Releases page and install it on a Windows machine with an NVIDIA GPU. You can choose the installation directory. The program and runtime are distributed separately; the installer **does not include model weights**.
 
-1. **Launch the program.** On first launch, the environment installation and repair window appears.
+1. **Launch the program.** The environment installation and repair window appears if the runtime or Qwen3.5 text model is missing. Missing image or video models alone do not trigger it; manage them in “Models & Environment”.
 2. **Click one-click repair.** The program selects the “above 12 GB” or “12 GB and below” profile from detected VRAM. Confirm the choice, then wait while it downloads and verifies the runtime and text, image and video models, and starts the services. Existing models are reused.
 
 A public download link does not change the [non-commercial license for FLUX.2 Klein 9B](https://help.bfl.ai/articles/9272590838-self-serve-dev-license-overview-pricing); commercial use requires authorization from the model provider.

@@ -134,18 +134,20 @@ class DashboardShellTests(unittest.TestCase):
         app._shutting_down = False
         app.after = mock.Mock()
         app._apply_available_release = mock.Mock()
+        current = main_gateway._release_version_tuple(main_gateway.APP_VERSION)
+        next_release = f"{current[0]}.{current[1]}.{current[2] + 1}"
 
         with mock.patch.object(
             main_gateway,
             "_fetch_latest_release_version",
-            return_value="2.0.4",
+            return_value=next_release,
         ):
             app._release_update_worker()
 
         app._apply_available_release.assert_not_called()
         callback = app.after.call_args.args[1]
         callback()
-        app._apply_available_release.assert_called_once_with("2.0.4")
+        app._apply_available_release.assert_called_once_with(next_release)
 
     def test_release_worker_is_silent_without_a_new_stable_version(self):
         app = object.__new__(GatewayApp)
@@ -280,7 +282,7 @@ class DashboardShellTests(unittest.TestCase):
 
                 self.assertEqual(app.title(), "灵境")
                 self.assertIsNotNone(self._find_by_text(app._sidebar, "灵境"))
-                self.assertEqual(tuple(app._pages), PAGE_IDS)
+                self.assertEqual(tuple(app._pages), ("overview", "settings"))
                 self.assertEqual(tuple(app._nav_buttons), PAGE_IDS)
                 self.assertGreaterEqual(
                     len(app._wf_rows),
@@ -355,6 +357,7 @@ class DashboardShellTests(unittest.TestCase):
                     app.update_idletasks()
                     self.assertEqual(app._current_page_id, page_id)
                     self.assertTrue(app._pages[page_id].winfo_ismapped())
+                self.assertEqual(set(app._pages), set(PAGE_IDS))
 
                 app.geometry("1090x700")
                 app.update()
@@ -492,6 +495,8 @@ class DashboardShellTests(unittest.TestCase):
                 app.destroy()
 
     def test_available_release_shows_green_dot_and_fixed_release_target(self):
+        current = main_gateway._release_version_tuple(main_gateway.APP_VERSION)
+        next_release = f"{current[0]}.{current[1]}.{current[2] + 1}"
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
         ):
@@ -501,7 +506,7 @@ class DashboardShellTests(unittest.TestCase):
                 app.update()
                 self.assertFalse(app._release_update_dot.winfo_ismapped())
 
-                app._apply_available_release("2.0.4")
+                app._apply_available_release(next_release)
                 app.update_idletasks()
 
                 self.assertTrue(app._release_update_dot.winfo_ismapped())
@@ -516,7 +521,7 @@ class DashboardShellTests(unittest.TestCase):
                     ),
                     C["success"],
                 )
-                self.assertIn("2.0.4", app._release_update_message())
+                self.assertIn(next_release, app._release_update_message())
                 self.assertTrue(app._version_row.bind("<Enter>"))
                 self.assertTrue(app._version_row.bind("<Leave>"))
                 self.assertTrue(app._version_row.bind("<Button-1>"))

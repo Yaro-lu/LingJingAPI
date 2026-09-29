@@ -616,6 +616,13 @@ def _check_models_status() -> dict:
     return check_model_groups(_models_dir(), MODEL_REQUIREMENTS)
 
 
+def _check_startup_text_model_status() -> dict:
+    """Keep the automatic startup model check limited to Qwen3.5."""
+    return check_model_groups(
+        _models_dir(), {"Qwen3.5": MODEL_REQUIREMENTS["Qwen3.5"]}
+    )
+
+
 def _model_download_active(control: dict) -> bool:
     return str(control.get("state") or "") in {
         "downloading",
@@ -1034,6 +1041,8 @@ class GatewayApp(WindowBase):
 
         # 状态缓存
         self._model_status = {"all_ok": False, "missing": {}}
+        self._model_status_full_checked = False
+        self._startup_qwen_ready = None
         self._environment_status = {}
         self._current_task_text = "无任务"
 
@@ -1431,11 +1440,14 @@ class GatewayApp(WindowBase):
             return
 
         self.after(0, lambda: self._set_light("models", "loading"))
-        self._model_status = _check_models_status()
-        if self._model_status["all_ok"]:
-            self.after(0, lambda: self._set_light("models", "online", "完整"))
+        text_status = _check_startup_text_model_status()
+        self._startup_qwen_ready = text_status["Qwen3.5"] == "完整"
+        if not self.__dict__.get("_model_status_full_checked", False):
+            self._model_status = text_status
+        if self._startup_qwen_ready:
+            self.after(0, lambda: self._set_light("models", "online", "文字可用"))
         else:
-            self.after(0, lambda: self._set_light("models", "offline", "缺失"))
+            self.after(0, lambda: self._set_light("models", "offline", "文字缺失"))
         self.after(0, self._update_model_display)
         vram_mb = int(system_info.get("vram_mb") or 0)
         self.after(0, lambda ready=environment_ready, m=vram_mb: self._offer_quick_repair(ready, m))
@@ -1666,13 +1678,19 @@ class GatewayApp(WindowBase):
 
     def _build_static_pages(self):
         self._dashboard_pages = StaticDashboardPages(self, C, F)
-        for page_id in ("resources", "settings"):
-            self._pages[page_id] = self._dashboard_pages.build(self._page_host, page_id)
+        # The model page checks workflow dependencies while it is built. Defer
+        # that work until the user opens it instead of doing it at startup.
+        self._pages["settings"] = self._dashboard_pages.build(self._page_host, "settings")
 
     def _show_page(self, page_id: str):
         if page_id == "workflows":
             page_id = "resources"
         page = self._pages.get(page_id)
+        if page is None and page_id == "resources":
+            dashboard = self.__dict__.get("_dashboard_pages")
+            if dashboard is not None:
+                page = dashboard.build(self._page_host, page_id)
+                self._pages[page_id] = page
         if page is None:
             return
         if self._current_page_id == page_id and page.winfo_ismapped():
@@ -1706,6 +1724,9 @@ class GatewayApp(WindowBase):
                     bg=C["sidebar_active"] if active else C["sidebar"],
                     fg=C["primary"] if active else C["text2"],
                 )
+        if page_id == "resources" and not self.__dict__.get("_model_status_full_checked", True):
+            self._model_status_full_checked = True
+            self._start_background_model_recheck()
 
     def _open_runtime_maintenance(self):
         """Open the shared maintenance center without starting an install."""
@@ -1737,14 +1758,13 @@ class GatewayApp(WindowBase):
         state = self._quick_repair_state
         pending = state.get("pending_profile")
         profile = pending or profile_for_vram(vram_mb)
-        missing_models = bool(
-            profile
-            and any(
-                self._model_status.get(group) != "完整"
-                for group in QUICK_REPAIR_PROFILES[profile]["groups"]
-            )
-        )
-        if not pending and (state.get("dismissed") or (environment_ready and not missing_models)):
+        qwen_ready = self.__dict__.get("_startup_qwen_ready")
+        if qwen_ready is None:
+            qwen_ready = self._model_status.get("Qwen3.5") == "完整"
+        missing_models = not qwen_ready
+        if environment_ready and not missing_models:
+            return
+        if not pending and state.get("dismissed"):
             return
         self._quick_repair_prompt_seen = True
         self.after(
@@ -1787,7 +1807,7 @@ class GatewayApp(WindowBase):
         tk.Label(body, text="环境安装与修复", font=F["title"], fg=C["text"], bg=C["card"]).pack(anchor="w")
         tk.Label(
             body,
-            text="首次安装或环境异常时，准备文字、图片、视频生成所需的运行环境与模型。",
+            text="自动提示只检查运行环境和 Qwen3.5；点击一键修复后，可按所选档位补齐图文视频模型。",
             font=F["normal"], fg=C["text2"], bg=C["card"],
         ).pack(anchor="w", pady=(6, 14))
         detected = (
@@ -8409,6 +8429,7 @@ class GatewayApp(WindowBase):
             if self._shutting_down:
                 return
             self._model_status = _check_models_status()
+            self._model_status_full_checked = True
             self._set_light(
                 "models",
                 "online" if self._model_status.get("all_ok") else "offline",
@@ -8472,6 +8493,7 @@ class GatewayApp(WindowBase):
         self._post_to_ui(lambda: self._set_light("models", "loading"))
         time.sleep(0.3)
         self._model_status = _check_models_status()
+        self._model_status_full_checked = True
         clear_model_index_cache()
         if self._shutting_down:
             return
