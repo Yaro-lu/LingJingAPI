@@ -160,7 +160,7 @@ class UnifiedMaintenanceTests(unittest.TestCase):
         self.pages._metric = mock.Mock()
         self.pages._card = lambda parent, height=None: Widget(parent)
         self.pages._build_resources(root)
-        for label, callback in [("检查环境", self.app._start_background_runtime_recheck), ("修复 / 更新", self.app._show_runtime_maintenance), ("打开目录", self.app._open_runtime_dir), ("修复运行环境", self.app._show_runtime_maintenance), ("一键更新 ComfyUI", self.app._start_comfyui_update)]:
+        for label, callback in [("检查环境", self.app._start_background_runtime_recheck), ("一键配置", self.app._show_quick_repair_dialog), ("打开目录", self.app._open_runtime_dir), ("修复运行环境", self.app._show_runtime_maintenance), ("一键更新 ComfyUI", self.app._start_comfyui_update)]:
             callback.reset_mock()
             self.actions(root, label)[0].options["command"]()
             callback.assert_called_once_with()
@@ -178,7 +178,7 @@ class UnifiedMaintenanceTests(unittest.TestCase):
         self.pages._metric = mock.Mock()
         self.pages._card = lambda parent, height=None: Widget(parent)
         self.pages._build_resources(root)
-        for label, callback in [("一键修复", self.app._install_runtime_from_mirror), ("本地安装包", self.app._select_runtime), ("更多方式", self.app._show_runtime_maintenance)]:
+        for label, callback in [("一键修复", self.app._show_quick_repair_dialog), ("本地安装包", self.app._select_runtime), ("更多方式", self.app._show_runtime_maintenance)]:
             self.actions(root, label)[0].options["command"]()
             callback.assert_called_once_with()
 

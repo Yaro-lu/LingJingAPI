@@ -15,7 +15,7 @@ class LocalExamplePageContractTests(unittest.TestCase):
     def test_page_is_branded_and_has_three_creation_categories(self):
         page = self.page()
         for marker in (
-            "灵境造片厂",
+            "灵境 · LingJingAPI",
             "本地 API 示例页",
             'data-category="text"',
             'data-category="image"',

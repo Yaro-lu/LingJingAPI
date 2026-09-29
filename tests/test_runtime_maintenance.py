@@ -241,6 +241,7 @@ class RuntimeMaintenanceTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["driver_version"], "580.88")
+        self.assertEqual(result["vram_mb"], 24564)
 
     def test_system_environment_rejects_pre_rtx_gpu_even_with_enough_vram(self):
         result = main_gateway._check_system_env(
@@ -584,12 +585,12 @@ class RuntimeMaintenanceTests(unittest.TestCase):
             app._set_light.call_args_list,
         )
 
-    def test_missing_runtime_opens_maintenance_center(self):
+    def test_missing_runtime_offers_quick_repair(self):
         app = self._app()
         app._set_light = mock.Mock()
         app._footer_label = mock.Mock()
         app._dashboard_pages = mock.Mock()
-        app._open_runtime_maintenance = mock.Mock()
+        app._offer_quick_repair = mock.Mock()
         app.after = lambda _delay, callback: callback()
 
         with (
@@ -599,10 +600,11 @@ class RuntimeMaintenanceTests(unittest.TestCase):
                 return_value=["runtime/python/python.exe"],
             ),
             mock.patch.object(main_gateway, "_check_system_env") as check_system,
+            mock.patch.object(main_gateway, "_detect_gpu_memory_mb", return_value=8192),
         ):
             app._startup_sequence()
 
-        app._open_runtime_maintenance.assert_called_once_with()
+        app._offer_quick_repair.assert_called_once_with(False, 8192)
         check_system.assert_not_called()
         for key in ("comfyui", "api", "tunnel"):
             self.assertIn(

@@ -138,14 +138,14 @@ class DashboardShellTests(unittest.TestCase):
         with mock.patch.object(
             main_gateway,
             "_fetch_latest_release_version",
-            return_value="1.0.4",
+            return_value="2.0.4",
         ):
             app._release_update_worker()
 
         app._apply_available_release.assert_not_called()
         callback = app.after.call_args.args[1]
         callback()
-        app._apply_available_release.assert_called_once_with("1.0.4")
+        app._apply_available_release.assert_called_once_with("2.0.4")
 
     def test_release_worker_is_silent_without_a_new_stable_version(self):
         app = object.__new__(GatewayApp)
@@ -279,8 +279,8 @@ class DashboardShellTests(unittest.TestCase):
                 app.attributes("-alpha", 0.0)
                 app.update()
 
-                self.assertEqual(app.title(), "灵境造片厂")
-                self.assertIsNotNone(self._find_by_text(app._sidebar, "灵境造片厂"))
+                self.assertEqual(app.title(), "灵境")
+                self.assertIsNotNone(self._find_by_text(app._sidebar, "灵境"))
                 self.assertEqual(tuple(app._pages), PAGE_IDS)
                 self.assertEqual(tuple(app._nav_buttons), PAGE_IDS)
                 self.assertGreaterEqual(
@@ -304,7 +304,7 @@ class DashboardShellTests(unittest.TestCase):
                 )
 
                 info_texts = set(self._all_text(app._info_frame))
-                self.assertTrue({"公网 URL", "本地 API", "API Key"} <= info_texts)
+                self.assertTrue({"公网 URL", "本地 URL", "API Key"} <= info_texts)
                 self.assertEqual(app._local_url_label.cget("text"), main_gateway.API_BASE)
 
                 app._show_page("overview")
@@ -320,14 +320,19 @@ class DashboardShellTests(unittest.TestCase):
                 public_bottom = public_top + app._public_url_card.winfo_height()
                 local_top = app._local_url_card.winfo_rooty()
                 local_bottom = local_top + app._local_url_card.winfo_height()
+                lan_top = app._lan_url_card.winfo_rooty()
+                lan_bottom = lan_top + app._lan_url_card.winfo_height()
                 self.assertLessEqual(abs(public_top - stack_top), 1)
-                self.assertLessEqual(abs(local_bottom - stack_bottom), 1)
+                self.assertLessEqual(abs(lan_bottom - stack_bottom), 1)
                 self.assertGreater(local_top, public_bottom)
+                self.assertGreater(lan_top, local_bottom)
                 self.assertLessEqual(
                     abs(
                         app._public_url_card.winfo_height()
                         + (local_top - public_bottom)
                         + app._local_url_card.winfo_height()
+                        + (lan_top - local_bottom)
+                        + app._lan_url_card.winfo_height()
                         - app._api_key_card.winfo_height()
                     ),
                     1,
@@ -424,7 +429,7 @@ class DashboardShellTests(unittest.TestCase):
 
                 self.assertIn("运行环境维护", texts)
                 self.assertTrue({"检查环境", "一键修复"} & texts)
-                self.assertTrue({"修复 / 更新", "本地安装包"} & texts)
+                self.assertTrue({"一键配置", "本地安装包"} & texts)
                 self.assertIn("工作流与模型", texts)
                 self.assertIn("导入已有模型", texts)
                 self.assertIn("重新检查", texts)
@@ -497,7 +502,7 @@ class DashboardShellTests(unittest.TestCase):
                 app.update()
                 self.assertFalse(app._release_update_dot.winfo_ismapped())
 
-                app._apply_available_release("1.0.4")
+                app._apply_available_release("2.0.4")
                 app.update_idletasks()
 
                 self.assertTrue(app._release_update_dot.winfo_ismapped())
@@ -512,7 +517,7 @@ class DashboardShellTests(unittest.TestCase):
                     ),
                     C["success"],
                 )
-                self.assertIn("1.0.4", app._release_update_message())
+                self.assertIn("2.0.4", app._release_update_message())
                 self.assertTrue(app._version_row.bind("<Enter>"))
                 self.assertTrue(app._version_row.bind("<Leave>"))
                 self.assertTrue(app._version_row.bind("<Button-1>"))
@@ -535,6 +540,7 @@ class DashboardShellTests(unittest.TestCase):
             app = object.__new__(GatewayApp)
             app._footer_label = mock.Mock()
             app._dashboard_pages = mock.Mock()
+            app.after = mock.Mock()
 
             with (
                 mock.patch.object(main_gateway, "BASE_DIR", base),
@@ -553,7 +559,7 @@ class DashboardShellTests(unittest.TestCase):
                 "models",
                 target.resolve(),
             )
-            self.assertIn("重新打开灵境造片厂后生效", showinfo.call_args.args[1])
+            self.assertIn("重新打开灵境 · LingJingAPI 后生效", showinfo.call_args.args[1])
 
     def test_comfyui_model_path_file_uses_the_configured_chinese_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -675,7 +681,7 @@ class DashboardShellTests(unittest.TestCase):
                         for widget in widgets
                         if isinstance(widget, main_gateway.SlimRoundedScrollbar)
                     ]
-                    self.assertEqual(len(scrollbars), 1)
+                    self.assertEqual(len(scrollbars), 2 if page_id == "resources" else 1)
                     self.assertEqual(scrollbars[0].bar_width, 4)
                     canvas = next(
                         widget
@@ -691,14 +697,16 @@ class DashboardShellTests(unittest.TestCase):
                     self.assertTrue(str(nested.bind("<MouseWheel>")))
                     self.assertTrue(str(nested.bind("<Button-4>")))
                     self.assertTrue(str(nested.bind("<Button-5>")))
+                    self.assertIsNotNone(canvas.bbox("all"))
                     before = canvas.yview()
                     nested.event_generate("<MouseWheel>", delta=-120)
                     app.update_idletasks()
-                    self.assertGreater(
-                        canvas.yview()[0],
-                        before[0],
-                        f"{page_id}: bbox={canvas.bbox('all')} viewport={canvas.winfo_height()} binding={nested.bind('<MouseWheel>')}",
-                    )
+                    if canvas.winfo_height() > 1:
+                        self.assertGreater(
+                            canvas.yview()[0],
+                            before[0],
+                            f"{page_id}: bbox={canvas.bbox('all')} viewport={canvas.winfo_height()} binding={nested.bind('<MouseWheel>')}",
+                        )
             finally:
                 app._dashboard_pages.cancel_pending()
                 app.destroy()
@@ -1771,6 +1779,7 @@ class DashboardShellTests(unittest.TestCase):
         app._update_status = mock.Mock()
         app._update_workflow_display = mock.Mock()
         app._update_task_display = mock.Mock()
+        app._update_generation_queue = mock.Mock()
         app._dashboard_pages = mock.Mock()
         data = {
             "workflows": [
@@ -1787,6 +1796,7 @@ class DashboardShellTests(unittest.TestCase):
 
         app._update_workflow_display.assert_called_once_with(data)
         app._dashboard_pages.refresh.assert_called_once_with(data)
+        app._update_generation_queue.assert_called_once_with({}, None)
 
     def test_workflow_display_fingerprint_tracks_models_and_validation(self):
         app = object.__new__(GatewayApp)

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>灵境造片厂｜创作工作室</title>
+  <title>灵境｜一键调用算力，简单好用。</title>
   <style>
     :root {
       --ink: #f4f2ec;
@@ -532,6 +532,7 @@
     .progress-track { height: 6px; overflow: hidden; border-radius: 99px; background: #30312c; }
     .progress-bar { width: 12%; height: 100%; border-radius: inherit; background: var(--signal); transition: width .35s ease; }
     .task-progress p { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+    .task-progress .cancel-task { margin-top: 16px; }
 
     .result-actions { display: flex; gap: 8px; min-height: 42px; padding-top: 12px; }
     .result-actions:empty { display: none; }
@@ -604,8 +605,8 @@
     main { width:auto!important; max-width:none!important; margin:0 0 0 230px!important; padding:80px 38px 24px!important; }
     header,.intro,footer,.endpoint-chip,.brand,.local-tag { display:none!important; }
     .side-panel { position:fixed; inset:0 auto 0 0; width:230px; border:0; border-radius:0; padding:26px 16px; background:#18191b; display:flex; flex-direction:column; z-index:10; }
-    .sidebar-brand { font-weight:700; font-size:21px; padding:0 10px 32px; letter-spacing:1px; }
-    .sidebar-brand small { display:block; font-size:9px; color:#777e83; letter-spacing:2.2px; margin-top:8px; }
+    .sidebar-brand { font-weight:700; font-size:17px; padding:0 10px 32px; letter-spacing:0; overflow-wrap:anywhere; }
+    .sidebar-brand small { display:block; font-size:10px; color:#777e83; letter-spacing:0; margin-top:8px; }
     .nav-item { text-align:left; background:transparent; border:0; padding:13px 14px; color:#aaa; border-radius:9px; margin-bottom:5px; cursor:pointer; }
     .nav-item.active,.nav-item:hover { color:#e7faf7; background:#272b2c; }
     .project-heading { display:flex; justify-content:space-between; align-items:center; color:#777; font-size:12px; padding:26px 10px 12px; }
@@ -770,10 +771,10 @@
   <main class="shell">
     <header class="masthead">
       <div class="brand">
-        <img src="icon.png" alt="灵境造片厂 Logo" onerror="this.onerror=null;this.src='../icon.png'">
+        <img src="icon.png" alt="灵境 · LingJingAPI Logo" onerror="this.onerror=null;this.src='../icon.png'">
         <div>
-          <div class="brand-name">灵境造片厂</div>
-          <div class="brand-sub">Local AI Gateway</div>
+          <div class="brand-name">灵境</div>
+          <div class="brand-sub">一键调用算力，简单好用。</div>
         </div>
       </div>
       <div class="local-tag">本地 API 示例页</div>
@@ -783,7 +784,7 @@
       <div>
         <div class="eyebrow">New user quick start</div>
         <h1 id="page-title">把 URL 和 Key<br>变成第一个<em>作品</em></h1>
-        <p class="intro-copy">这是随客户端安装的本地示例页。API Key 仅用于向你指定的客户端鉴权，无需额外部署网站。启动灵境造片厂，复制 URL 和 API Key，连接后显示全部工作流名称，选择后加载参数。局域网不可达时请改用互联网 HTTPS URL。</p>
+        <p class="intro-copy">一键调用算力，简单好用。这是随客户端安装的本地示例页。API Key 仅用于向你指定的客户端鉴权，无需额外部署网站。启动灵境 · LingJingAPI，复制 URL 和 API Key，连接后显示全部工作流名称，选择后加载参数。局域网不可达时请改用互联网 HTTPS URL。</p>
       </div>
       <div class="quick-steps" aria-label="快速使用步骤">
         <div class="quick-step"><b>STEP 01</b><span>启动客户端并完成运行环境、模型检查</span></div>
@@ -815,7 +816,7 @@
 
     <section class="workbench" aria-label="示例创作台">
       <aside class="side-panel">
-        <div class="sidebar-brand">灵境造片厂 <small>CREATIVE STUDIO</small></div>
+        <div class="sidebar-brand">灵境 <small>一键调用算力，简单好用。</small></div>
         <button id="createView" class="nav-item active" type="button">✦　创作</button>
         <div class="project-heading"><span>我的项目</span><button id="newProject" type="button" aria-label="新建项目">＋</button></div>
         <div id="projectList" class="project-list"></div>
@@ -948,7 +949,7 @@
     </section>
 
     <footer>
-      <span>灵境造片厂 · 本地 API 新手示例</span>
+      <span>灵境 · LingJingAPI · 本地 API 新手示例</span>
       <span>页面本身不包含模型，也不会替代客户端运行环境。</span>
     </footer>
   </main>
@@ -1001,6 +1002,7 @@
       models: { text: [], image: [], video: [] },
       selected: { text: "", image: "", video: "" },
       busy: false,
+      activeTask: null,
       mediaObjectUrl: ""
     };
 
@@ -1155,7 +1157,7 @@
       if (error?.offline) return error.message;
       if (error?.status === 401) return "连接失败：API Key 不正确，请重新从客户端复制。";
       if (error?.status === 403) return "连接失败：当前 Key 没有访问权限。";
-      if (error?.status === 429) return "请求过于频繁，请稍等一分钟后重试。";
+      if (error?.status === 429) return "任务队列已满，请等前面的任务完成后重试。";
       if (error instanceof TypeError && isPrivateLanHost(new URL(state.baseUrl).hostname)) return "局域网连接失败，请改用客户端提供的互联网 HTTPS URL，并确认公网连接在线。";
       if (error instanceof TypeError) return "无法访问客户端。请确认客户端已启动、URL 正确且公网连接在线。";
       return String(error?.message || "请求失败，请检查客户端状态");
@@ -1306,17 +1308,43 @@
       const copy = document.createElement("p");
       copy.id = "liveProgressText";
       copy.textContent = detail;
-      wrap.append(heading, track, copy);
+      const cancel = document.createElement("button");
+      cancel.id = "cancelTaskButton";
+      cancel.className = "ghost-btn cancel-task";
+      cancel.type = "button";
+      cancel.textContent = "取消任务";
+      cancel.hidden = true;
+      cancel.addEventListener("click", async () => {
+        const task = state.activeTask;
+        if (!task || cancel.disabled) return;
+        cancel.disabled = true;
+        updateProgress(0, "正在取消任务...");
+        cancel.hidden = true;
+        try {
+          await apiRequest(`/v1/tasks/${encodeURIComponent(task.taskId)}/cancel`, { method: "POST" });
+          updateProgress(0, "已取消，结果将被丢弃");
+        } catch (error) {
+          cancel.disabled = false;
+          cancel.hidden = false;
+          showToast(friendlyError(error), true);
+        }
+      });
+      wrap.append(heading, track, copy, cancel);
       elements.resultStage.append(wrap);
     }
 
-    function updateProgress(percent, text) {
+    function updateProgress(percent, text, queuePosition = 0) {
       const title = $("liveProgressTitle");
-      if (title) title.textContent = "任务处理中";
+      if (title) title.textContent = queuePosition > 0 ? `排队中 · 第 ${queuePosition} 位` : "任务处理中";
       const bar = $("liveProgress");
       const copy = $("liveProgressText");
+      const cancel = $("cancelTaskButton");
       if (bar) bar.style.width = `${Math.max(4, Math.min(100, Number(percent) || 0))}%`;
       if (copy) copy.textContent = text;
+      if (cancel && state.activeTask) {
+        cancel.hidden = false;
+        cancel.textContent = queuePosition > 0 ? "取消排队" : "强制取消";
+      }
     }
 
     function renderTextResult(content) {
@@ -1413,7 +1441,7 @@
         media.controls = true;
         media.playsInline = true;
       } else {
-        media.alt = "灵境造片厂生成图片";
+        media.alt = "灵境 · LingJingAPI 生成图片";
         media.style.cursor = "zoom-in";
         media.addEventListener("click", () => openImageViewer(objectUrl, media.alt));
       }
@@ -1464,9 +1492,15 @@
           return data;
         }
         if (["failed", "error", "cancelled", "canceled"].includes(status)) {
-          throw new Error(data?.error?.message || data?.error || data?.message || "客户端任务执行失败");
+          const error = new Error(data?.error?.message || data?.error || data?.message || "客户端任务执行失败");
+          error.terminal = true;
+          error.cancelled = ["cancelled", "canceled"].includes(status);
+          throw error;
         }
-        updateProgress(percent, data.progress_label || data.phase || `任务状态：${status || "处理中"}`);
+        const position = Number(data.queue_position || 0);
+        updateProgress(position > 0 ? 0 : percent,
+          position > 0 ? `前面还有 ${position} 个任务` : data.progress_label || data.phase || `任务状态：${status || "处理中"}`,
+          position);
       }
       throw new Error("任务等待超时，请在客户端查看运行日志");
     }
@@ -1557,6 +1591,7 @@
         const taskId = data.task_id || data.id;
         if (!taskId) throw new Error("客户端未返回任务 ID");
         submittedTask = { taskId, statusPath: data.status_path };
+        state.activeTask = submittedTask;
         const completed = await pollTask(taskId, data.status_path, model.output_type || "image");
         saveArtwork(model, body, completed);
         setResultStatus("完成", "ok");
@@ -1567,15 +1602,15 @@
           workflowCache.drop(model.id);
           state.activeModel = null;
         }
-        setResultStatus(error.offline ? "服务端离线" : "调用失败", "error");
+        setResultStatus(error.offline ? "服务端离线" : error.cancelled ? "已取消" : "调用失败", "error");
         elements.resultStage.style.display="";
         resetResultActions();
         elements.resultStage.replaceChildren();
         const message = document.createElement("pre");
         message.className = "text-result";
-        message.textContent = friendlyError(error) + (submittedTask ? `\n任务：${submittedTask.taskId}\n可重新读取结果，无需再次生成。` : "");
+        message.textContent = friendlyError(error) + (submittedTask && !error.terminal ? `\n任务：${submittedTask.taskId}\n可重新读取结果，无需再次生成。` : "");
         elements.resultStage.append(message);
-        if (submittedTask) {
+        if (submittedTask && !error.terminal) {
           const retry = document.createElement("button");
           retry.className = "ghost-btn";
           retry.textContent = "重新读取结果";
@@ -1593,6 +1628,7 @@
         }
         showToast(friendlyError(error), true);
       } finally {
+        state.activeTask = null;
         state.busy = false;
         updateGenerateAvailability();
       }
@@ -2194,6 +2230,8 @@
       }
       const route=`/v1/workflows/run/${encodeURIComponent(model.id)}`;
       $("modelDocText").textContent=`${model.name} 接入说明\n\n基础地址：${state.baseUrl}\n鉴权：Authorization: Bearer <你的 API Key>\n\n1. GET /v1/workflows/${encodeURIComponent(model.id)}/schema 获取此工作流的输入定义\n2. POST ${route}，Content-Type: application/json\n${JSON.stringify(sample,null,2)}\n\n字段说明：\n${state.controls.map(c=>`${c.field.name}：${c.field.label || c.field.name}，${c.field.type}，${c.required?'必填':'可选'}${c.field.description?'；'+c.field.description:''}`).join('\n')}\n\n系统提示词：页面将系统提示词与用户提示词合并为 prompt；接口也可以直接提交完整 prompt。\n3. 响应含 task_id；GET /v1/tasks/{task_id} 轮询，completed 为完成、failed 为失败。\n4. 文字结果读取 text；图片/视频读取 outputs 中的 download_path，并携带同一 Bearer Key 下载。\n5. DELETE /v1/files/{task_id}/{filename} 删除对应本地生成文件（需新版后端）。\n\nPython 示例：\nimport requests, time, json\nbase = ${JSON.stringify(state.baseUrl)}\nh = {"Authorization": "Bearer <你的 API Key>"}\nbody = json.loads(${JSON.stringify(JSON.stringify(sample))})\nr = requests.post(base + ${JSON.stringify(route)}, headers=h, json=body)\nr.raise_for_status()\ntask = r.json()["task_id"]\nwhile True:\n    r = requests.get(base + "/v1/tasks/" + task, headers=h)\n    r.raise_for_status()\n    result = r.json()\n    if result["status"] in ("completed", "failed"): break\n    time.sleep(3)\nprint(result)`;
+      $("modelDocText").textContent = $("modelDocText").textContent.replace("completed 为完成、failed 为失败。", "completed 为完成、failed 为失败、cancelled 为已取消。")
+        + "\n\n任务队列：所有入口按提交顺序执行。GET /v1/tasks/queue 查看排队位置；POST /v1/tasks/{task_id}/cancel 取消等待或运行中的任务。取消后没有可读取的结果。";
       $("modelDoc").showModal();
     });
     $("closeModelDoc").addEventListener("click",()=>$("modelDoc").close());

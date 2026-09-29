@@ -218,7 +218,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertTrue(self.runtime_release["download_url"].endswith(f"/{package_name}"))
 
     def test_installer_creates_a_branded_root_launcher(self):
-        self.assertIn('#define MyAppName "灵境造片厂"', self.installer_script)
+        self.assertIn('#define MyAppName "灵境 · LingJingAPI"', self.installer_script)
         self.assertIn('Name: "{app}\\{#MyAppName}"', self.installer_script)
         self.assertIn(
             'IconFilename: "{app}\\app\\gui\\assets\\app.ico"',
@@ -233,7 +233,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertIn("灵境造片厂使用教学.pdf", self.release_script)
 
     def test_readme_describes_manual_download_and_installed_tutorial(self):
-        for marker in ("https://github.com/Yaro-lu/LingJingAPI", "一键修复", "拉取失败", "灵境造片厂使用教学.pdf"):
+        for marker in ("https://github.com/Yaro-lu/LingJingAPI", "一键修复", "拉取失败", "使用教学 PDF"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, self.readme)
 
@@ -251,7 +251,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertNotIn(old_visual_workflow_delete, self.installer_script)
 
     def test_installer_creates_same_logo_desktop_example_shortcut(self):
-        self.assertIn('Name: "{autodesktop}\\灵境造片厂示例页"', self.installer_script)
+        self.assertIn('Name: "{autodesktop}\\灵境 · LingJingAPI 示例页"', self.installer_script)
         self.assertIn('Filename: "{app}\\灵境造片厂示例页.html"', self.installer_script)
         self.assertIn(
             'IconFilename: "{app}\\app\\gui\\assets\\app.ico"',
@@ -264,15 +264,11 @@ class LightweightReleaseContractTests(unittest.TestCase):
         )
         self.assertNotIn("unchecked", desktop_task)
 
-    def test_uninstaller_removes_installed_and_downloaded_client_content(self):
+    def test_uninstaller_removes_program_files_but_preserves_mutable_data(self):
         removable_directories = (
             ".venv",
             "app",
             "bin",
-            "cache",
-            "models",
-            "runtime",
-            "workflows",
         )
         for directory in removable_directories:
             with self.subTest(directory=directory):
@@ -281,36 +277,24 @@ class LightweightReleaseContractTests(unittest.TestCase):
                     self.installer_script,
                 )
 
-        transient_directories = (
-            ".runtime-install-staging-*",
-            ".runtime-install-backup-*",
-            ".comfyui-update-staging-*",
-            ".comfyui-update-overlay-*",
+        preserved_directories = (
+            "cache", "models", "runtime", "workflows", "outputs",
+            ".runtime-install-staging-*", ".runtime-install-backup-*",
+            ".comfyui-update-staging-*", ".comfyui-update-overlay-*",
             ".comfyui-update-backup-*",
         )
-        for directory in transient_directories:
+        for directory in preserved_directories:
             with self.subTest(directory=directory):
-                self.assertIn(
+                self.assertNotIn(
                     f'Type: filesandordirs; Name: "{{app}}\\{directory}"',
                     self.installer_script,
                 )
 
-        transient_files = (
-            ".comfyui-update-requirements-*.txt",
-            ".comfyui-update-release-*.zip",
-            ".comfyui-update-release-*.zip.part",
-            ".comfyui-update-manifest-*.json",
-            ".comfyui-update-manifest-*.json.tmp",
-            ".comfyui-update-journal-*.json",
-            "runtime-nvidia-*.7z",
-            "runtime-nvidia-*.7z.sha256",
-        )
-        for filename in transient_files:
-            with self.subTest(filename=filename):
-                self.assertIn(
-                    f'Type: files; Name: "{{app}}\\{filename}"',
-                    self.installer_script,
-                )
+        self.assertIn("PreservedModelsPath := ConfiguredDataPath('models')", self.installer_script)
+        self.assertIn("PreservedOutputsPath := ConfiguredDataPath('outputs')", self.installer_script)
+        self.assertIn("CurUninstallStep = usPostUninstall", self.installer_script)
+        self.assertIn("模型和生成结果没有自动删除", self.installer_script)
+        self.assertIn("UninstallLogMode=overwrite", self.installer_script)
 
     def test_uninstaller_preserves_root_outputs_and_never_recursively_deletes_app_root(self):
         uninstall_section = self.installer_script.split("[UninstallDelete]", 1)[1]

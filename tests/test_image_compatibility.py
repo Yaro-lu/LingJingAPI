@@ -105,6 +105,7 @@ class FakeComfyUIClient:
     fail_queue = False
     uploaded_images = []
     queued_workflows = []
+    cancelled_prompts = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -148,6 +149,9 @@ class FakeComfyUIClient:
         if history.get("kind") == "text":
             return [{"type": "text", "text": "OK"}]
         return [{"filename": "generated.png", "type": "output"}]
+
+    def cancel_prompt(self, prompt_id):
+        self.cancelled_prompts.append(prompt_id)
 
 
 class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
@@ -317,6 +321,7 @@ class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         FakeComfyUIClient.fail_queue = False
         FakeComfyUIClient.uploaded_images.clear()
         FakeComfyUIClient.queued_workflows.clear()
+        FakeComfyUIClient.cancelled_prompts.clear()
         self.fake_state = SimpleNamespace(
             api_key="sk-test-image",
             admin_key="sk-admin-test",
@@ -741,7 +746,7 @@ class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         with server._task_lock:
             self.assertEqual(server.current_task, {})
 
-    async def test_concurrent_requests_cannot_both_pass_task_reservation(self):
+    async def test_concurrent_requests_enter_one_fifo_queue(self):
         FakeComfyUIClient.block_queue = True
         first = asyncio.create_task(
             asgi_request(
@@ -755,7 +760,7 @@ class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         entered = await asyncio.to_thread(FakeComfyUIClient.queue_entered.wait, 2)
         self.assertTrue(entered)
 
-        second_status, _headers, _body = await asgi_request(
+        second_status, _headers, second_body = await asgi_request(
             self.app,
             "POST",
             "/",
@@ -766,7 +771,196 @@ class ImageCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         first_status, _headers, _body = await asyncio.wait_for(first, timeout=2)
 
         self.assertEqual(first_status, 202)
-        self.assertEqual(second_status, 429)
+        self.assertEqual(second_status, 202)
+        second = json.loads(second_body)
+        self.assertEqual(second["status"], "pending")
+        self.assertEqual(second["queue_position"], 1)
+
+    async def test_workflow_and_image_api_share_queue(self):
+        first_status, _, first_body = await asgi_request(
+            self.app, "POST", "/v1/workflows/run/flux_t2i_v1", headers=self.auth,
+            json_body={"prompt": "工作流入口"},
+        )
+        self.assertEqual(first_status, 200)
+        self.assertTrue(await asyncio.to_thread(FakeComfyUIClient.started.wait, 2))
+        second_status, _, second_body = await asgi_request(
+            self.app, "POST", "/api/v3/images/generations", headers=self.auth,
+            json_body=self._image_body(**{"async": True}),
+        )
+        self.assertEqual(second_status, 202)
+        self.assertEqual(json.loads(second_body)["queue_position"], 1)
+        queue_status, _, queue_body = await asgi_request(
+            self.app, "GET", "/v1/tasks/queue", headers=self.auth,
+        )
+        self.assertEqual(queue_status, 200)
+        queue = json.loads(queue_body)
+        self.assertEqual(queue["active"]["task_id"], json.loads(first_body)["task_id"])
+        self.assertEqual(queue["pending"][0]["task_id"], json.loads(second_body)["task_id"])
+        FakeComfyUIClient.release.set()
+
+    async def test_queued_cancel_updates_positions_without_submitting_to_comfy(self):
+        async def submit(prompt):
+            status, _, body = await asgi_request(
+                self.app, "POST", "/", headers=self.auth,
+                json_body={"prompt": prompt, "async": True},
+            )
+            self.assertEqual(status, 202)
+            return json.loads(body)["task_id"]
+
+        first = await submit("先执行")
+        self.assertTrue(await asyncio.to_thread(FakeComfyUIClient.started.wait, 2))
+        second = await submit("取消这个")
+        third = await submit("随后执行")
+        status, _, body = await asgi_request(
+            self.app, "POST", f"/v1/tasks/{second}/cancel", headers=self.auth,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["status"], "cancelled")
+        status, _, body = await asgi_request(self.app, "GET", "/v1/tasks/queue", headers=self.auth)
+        queue = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(queue["active"]["task_id"], first)
+        self.assertEqual([item["task_id"] for item in queue["pending"]], [third])
+        self.assertEqual(queue["pending"][0]["queue_position"], 1)
+        self.assertEqual(len(FakeComfyUIClient.queued_workflows), 1)
+        FakeComfyUIClient.release.set()
+
+    async def test_queue_limit_returns_429_without_dropping_accepted_tasks(self):
+        self.fake_config.max_pending = 1
+        first_status, _, _ = await asgi_request(
+            self.app, "POST", "/", headers=self.auth,
+            json_body={"prompt": "正在执行", "async": True},
+        )
+        self.assertEqual(first_status, 202)
+        self.assertTrue(await asyncio.to_thread(FakeComfyUIClient.started.wait, 2))
+        second_status, _, second_body = await asgi_request(
+            self.app, "POST", "/", headers=self.auth,
+            json_body={"prompt": "排队中", "async": True},
+        )
+        third_status, _, _ = await asgi_request(
+            self.app, "POST", "/", headers=self.auth,
+            json_body={"prompt": "超过上限", "async": True},
+        )
+        self.assertEqual(second_status, 202)
+        self.assertEqual(third_status, 429)
+        queued_id = json.loads(second_body)["task_id"]
+        status, _, _ = await asgi_request(self.app, "POST", f"/v1/tasks/{queued_id}/cancel")
+        self.assertEqual(status, 401)
+        status, _, _ = await asgi_request(self.app, "GET", f"/v1/tasks/{queued_id}", headers=self.auth)
+        self.assertEqual(status, 200)
+        FakeComfyUIClient.release.set()
+
+    async def test_running_cancel_discards_result_then_starts_next_task(self):
+        async def submit(prompt):
+            status, _, body = await asgi_request(
+                self.app, "POST", "/", headers=self.auth,
+                json_body={"prompt": prompt, "async": True},
+            )
+            self.assertEqual(status, 202)
+            return json.loads(body)["task_id"]
+
+        first = await submit("强制取消")
+        self.assertTrue(await asyncio.to_thread(FakeComfyUIClient.started.wait, 2))
+        second = await submit("继续执行")
+        status, _, body = await asgi_request(
+            self.app, "POST", f"/v1/tasks/{first}/cancel", headers=self.auth,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["status"], "cancelled")
+        FakeComfyUIClient.release.set()
+        for _ in range(200):
+            status, _, body = await asgi_request(self.app, "GET", f"/v1/tasks/{second}", headers=self.auth)
+            if json.loads(body)["status"] == "completed":
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["status"], "completed")
+        _, _, first_body = await asgi_request(self.app, "GET", f"/v1/tasks/{first}", headers=self.auth)
+        cancelled = json.loads(first_body)
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertEqual(cancelled["outputs"], [])
+        self.assertIn("prompt-image-test", FakeComfyUIClient.cancelled_prompts)
+
+    async def test_failed_task_advances_queue(self):
+        calls = 0
+
+        def progress(client, prompt_id, **kwargs):
+            nonlocal calls
+            FakeComfyUIClient.started.set()
+            FakeComfyUIClient.release.wait(timeout=5)
+            calls += 1
+            if calls == 1:
+                return {"status": "failed", "error": "fixture failure"}
+            return {"status": "completed", "value": 1, "max": 1, "percent": 100}
+
+        with mock.patch.object(FakeComfyUIClient, "get_progress", progress):
+            first_status, _, first_body = await asgi_request(
+                self.app, "POST", "/", headers=self.auth,
+                json_body={"prompt": "会失败", "async": True},
+            )
+            self.assertEqual(first_status, 202)
+            self.assertTrue(await asyncio.to_thread(FakeComfyUIClient.started.wait, 2))
+            second_status, _, second_body = await asgi_request(
+                self.app, "POST", "/", headers=self.auth,
+                json_body={"prompt": "下一项", "async": True},
+            )
+            self.assertEqual(second_status, 202)
+            first = json.loads(first_body)["task_id"]
+            second = json.loads(second_body)["task_id"]
+            FakeComfyUIClient.release.set()
+            for _ in range(200):
+                _, _, body = await asgi_request(self.app, "GET", f"/v1/tasks/{second}", headers=self.auth)
+                if json.loads(body)["status"] == "completed":
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(json.loads(body)["status"], "completed")
+            _, _, first_body = await asgi_request(self.app, "GET", f"/v1/tasks/{first}", headers=self.auth)
+            self.assertEqual(json.loads(first_body)["status"], "failed")
+
+    async def test_cancel_during_result_read_never_publishes_output(self):
+        entered, release_history = threading.Event(), threading.Event()
+        original_history = FakeComfyUIClient.get_history
+
+        def slow_history(client, prompt_id):
+            entered.set()
+            release_history.wait(timeout=3)
+            return original_history(client, prompt_id)
+
+        with mock.patch.object(FakeComfyUIClient, "get_history", slow_history):
+            first_status, _, first_body = await asgi_request(
+                self.app, "POST", "/", headers=self.auth,
+                json_body={"prompt": "取消读取结果", "async": True},
+            )
+            self.assertEqual(first_status, 202)
+            first = json.loads(first_body)["task_id"]
+            FakeComfyUIClient.release.set()
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            second_status, _, second_body = await asgi_request(
+                self.app, "POST", "/", headers=self.auth,
+                json_body={"prompt": "下一项", "async": True},
+            )
+            self.assertEqual(second_status, 202)
+            second = json.loads(second_body)["task_id"]
+            status, _, _ = await asgi_request(
+                self.app, "POST", f"/v1/tasks/{first}/cancel", headers=self.auth,
+            )
+            self.assertEqual(status, 200)
+            release_history.set()
+            for _ in range(200):
+                _, _, body = await asgi_request(self.app, "GET", f"/v1/tasks/{second}", headers=self.auth)
+                if json.loads(body)["status"] == "completed":
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(json.loads(body)["status"], "completed")
+            _, _, first_body = await asgi_request(self.app, "GET", f"/v1/tasks/{first}", headers=self.auth)
+            first_record = json.loads(first_body)
+            self.assertEqual(first_record["status"], "cancelled")
+            self.assertEqual(first_record["outputs"], [])
+            (self.base / "outputs" / "generated.png").write_bytes(PNG_BYTES)
+            file_status, _, _ = await asgi_request(
+                self.app, "GET", f"/v1/files/{first}/generated.png", headers=self.auth,
+            )
+            self.assertEqual(file_status, 404)
 
     async def test_named_short_url_resolves_case_insensitive_workflow_name(self):
         status, _headers, body = await asgi_request(

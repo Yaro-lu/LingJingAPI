@@ -203,6 +203,26 @@ class RuntimeUpdateLaunchTests(unittest.TestCase):
             self.assertEqual(command[command.index("-OperationId") + 1], "a" * 32)
             self.assertIn("-NoRestart", command)
 
+    def test_quick_repair_can_request_a_verified_client_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base, staging, _helper = _prepare_handoff(tmp)
+            powershell = Path(tmp) / "powershell.exe"
+            powershell.write_bytes(b"fixture")
+            command = runtime_update.build_runtime_update_command(
+                base, staging, parent_pid=4321, powershell_path=powershell,
+                restart_client=True,
+            )
+            self.assertNotIn("-NoRestart", command)
+            values = runtime_update._validated_runtime_update_values(
+                command, base_dir=base, powershell_path=powershell,
+            )
+            self.assertTrue(values["restart_client"])
+            arguments, _operation = runtime_update._task_action_arguments(
+                command, base_dir=base, powershell_path=powershell,
+            )
+            encoded = arguments.rsplit(" ", 1)[-1].strip('"')
+            self.assertNotIn("-NoRestart", base64.b64decode(encoded).decode("utf-16le"))
+
     def test_launch_is_hidden_and_not_registered_with_process_supervisor(self):
         with tempfile.TemporaryDirectory() as tmp:
             base, staging, _helper = _prepare_handoff(tmp)

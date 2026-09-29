@@ -392,6 +392,7 @@ def build_runtime_update_command(
     parent_pid: int,
     powershell_path: Path | None = None,
     wait_timeout_seconds: int = 180,
+    restart_client: bool = False,
 ) -> list[str]:
     """Build a shell-free argument vector for the detached update helper."""
     base, staging, helper, operation_id = validate_runtime_update_handoff(
@@ -405,7 +406,7 @@ def build_runtime_update_command(
     powershell = Path(powershell_path or find_windows_powershell()).resolve(strict=True)
     if not powershell.is_file() or powershell.name.casefold() != "powershell.exe":
         raise ValueError("运行环境更新只能使用 Windows PowerShell")
-    return [
+    command = [
         str(powershell),
         "-NoLogo",
         "-NoProfile",
@@ -424,8 +425,10 @@ def build_runtime_update_command(
         operation_id,
         "-WaitTimeoutSeconds",
         str(int(wait_timeout_seconds)),
-        "-NoRestart",
     ]
+    if not restart_client:
+        command.append("-NoRestart")
+    return command
 
 
 def _powershell_literal(value: object) -> str:
@@ -452,9 +455,12 @@ def _validated_runtime_update_values(
         12: "-StagingDir",
         14: "-OperationId",
         16: "-WaitTimeoutSeconds",
-        18: "-NoRestart",
     }
-    if len(target) != 19 or any(target[index] != value for index, value in expected_flags.items()):
+    if (
+        len(target) not in (18, 19)
+        or (len(target) == 19 and target[18] != "-NoRestart")
+        or any(target[index] != value for index, value in expected_flags.items())
+    ):
         raise ValueError("运行环境更新命令结构无效")
 
     base = Path(base_dir).resolve(strict=True)
@@ -488,6 +494,7 @@ def _validated_runtime_update_values(
         "staging": staging,
         "operation_id": operation_id,
         "timeout_seconds": timeout_seconds,
+        "restart_client": len(target) == 18,
     }
 
 
@@ -505,7 +512,7 @@ def _task_action_arguments(command: list[str], *, base_dir: Path, powershell_pat
         f"-StagingDir {_powershell_literal(values['staging'])} "
         f"-OperationId {values['operation_id']} "
         f"-WaitTimeoutSeconds {values['timeout_seconds']} "
-        "-NoRestart\n"
+        + ("\n" if values["restart_client"] else "-NoRestart\n")
     )
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     arguments = subprocess.list2cmdline(
@@ -739,6 +746,7 @@ def _launch_runtime_update_unlocked(
     popen_factory=None,
     task_launcher=None,
     started_waiter=None,
+    restart_client: bool = False,
 ):
     """Start the updater after the caller has serialized the handoff."""
     if os.name != "nt":
@@ -749,6 +757,7 @@ def _launch_runtime_update_unlocked(
         staging_dir,
         parent_pid=parent_pid,
         powershell_path=powershell_path,
+        restart_client=restart_client,
     )
     popen_factory = popen_factory or subprocess.Popen
     base_creation_flags = (
@@ -824,6 +833,7 @@ def launch_runtime_update(
     popen_factory=None,
     task_launcher=None,
     started_waiter=None,
+    restart_client: bool = False,
 ):
     """Start one serialized updater outside the GUI Job/process tree."""
     if os.name != "nt":
@@ -838,6 +848,7 @@ def launch_runtime_update(
             popen_factory=popen_factory,
             task_launcher=task_launcher,
             started_waiter=started_waiter,
+            restart_client=restart_client,
         )
 
 

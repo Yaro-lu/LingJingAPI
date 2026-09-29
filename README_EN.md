@@ -1,8 +1,10 @@
 [简体中文](README.md) | [English](README_EN.md)
 
-# LingJingAPI · LingJing AI Studio
+# 灵境 · LingJingAPI
 
-**Use remote GPU compute to generate text, images and video.**
+**One-click access to compute power. Simple to use.**
+
+Use remote GPU compute to generate text, images and video.
 
 Deploy the generation service on a machine with GPU compute, then connect from computers or phones using its URL and API Key. Models run on the server; calling devices submit tasks and display or download the results.
 
@@ -17,7 +19,9 @@ Two typical uses:
 
 The program and runtime packages are distributed separately through this repository’s Releases section.
 
-Version: `2.0.2`. Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
+Version: `2.0.3`. Install the program and runtime on the GPU server. Neither package includes model weights; download or map existing models separately. Calling devices do not need local models.
+
+Uninstall keeps models and generated outputs, then shows their locations so you can remove them manually if desired.
 
 ## Three steps
 
@@ -30,6 +34,7 @@ Version: `2.0.2`. Install the program and runtime on the GPU server. Neither pac
 - Text, image generation/editing and video generation, depending on the installed workflows and models.
 - Computer and phone access over public HTTPS, with local and LAN access also supported.
 - ComfyUI workflow import, model/environment management and APIs for third-party software.
+- A shared FIFO queue across desktop, phone and API requests, with queue positions and task cancellation.
 
 ## Screenshots
 

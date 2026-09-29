@@ -215,6 +215,8 @@ def endpoint_table(s):
         ["POST", "/api/v3/images/generations", "火山/即梦风格图片生成接口"],
         ["POST", "/v1/workflows/run/{workflow_id}", "按工作流 ID 提交生成任务"],
         ["GET", "/v1/tasks/{task_id}", "查询异步任务进度和结果"],
+        ["GET", "/v1/tasks/queue", "查看统一队列与排队位置"],
+        ["POST", "/v1/tasks/{task_id}/cancel", "取消等待或运行中的任务"],
         ["GET", "/v1/files/{task_id}/{filename}", "下载任务生成文件"],
     ]
     rendered = []
@@ -249,7 +251,7 @@ def draw_page_frame(canvas, doc):
         canvas.line(22 * mm, height - 15 * mm, width - 22 * mm, height - 15 * mm)
         canvas.setFont("LingJing", 7.5)
         canvas.setFillColor(TEXT_2)
-        canvas.drawString(22 * mm, height - 11.5 * mm, "灵境造片厂使用教学与接口说明")
+        canvas.drawString(22 * mm, height - 11.5 * mm, "灵境 · LingJingAPI 使用教学与接口说明")
     canvas.line(22 * mm, 14 * mm, width - 22 * mm, 14 * mm)
     canvas.setFont("LingJing", 7.5)
     canvas.setFillColor(TEXT_2)
@@ -265,7 +267,8 @@ def build_story(s):
         image = Image(str(logo), width=28 * mm, height=28 * mm)
         image.hAlign = "CENTER"
         story.extend([Spacer(1, 18 * mm), image, Spacer(1, 8 * mm)])
-    story.append(Paragraph("灵境造片厂", s["cover_title"]))
+    story.append(Paragraph("灵境 · LingJingAPI", s["cover_title"]))
+    story.append(Paragraph("一键调用算力，简单好用。", s["cover_subtitle"]))
     story.append(Paragraph("使用教学与 API 接口说明", s["cover_subtitle"]))
     story.append(Spacer(1, 12 * mm))
     story.append(
@@ -301,7 +304,7 @@ def build_story(s):
 
     story.extend([PageBreak(), Paragraph("1. 安装与第一次启动", s["h1"])])
     story.append(Paragraph("1. 双击轻量安装包，按提示完成安装。安装过程不需要管理员权限，也不会安装模型。", s["step"]))
-    story.append(Paragraph("2. 安装完成后，桌面会出现两个使用同一 Logo 的入口：“灵境造片厂”用于启动客户端，“灵境造片厂示例页”用于第一次体验接口。", s["step"]))
+    story.append(Paragraph("2. 安装完成后，桌面会出现两个使用同一 Logo 的入口：“灵境 · LingJingAPI”用于启动客户端，“灵境 · LingJingAPI 示例页”用于第一次体验接口。", s["step"]))
     story.append(Paragraph("3. 客户端界面可以立即打开；此时文字、图片和视频生成仍不可用，因为大型 AI 运行环境独立分发。", s["step"]))
     story.append(Paragraph("4. 进入“模型与环境”，安装或修复运行环境。客户端会自动拉取环境包，并使用内置 SHA256 校验，通过后直接安装。", s["step"]))
     story.append(Paragraph("5. 只有自动拉取失败时，客户端才会显示“自动修复失败”弹窗。可复制 GitHub 地址，手动下载环境包，再选择本地环境包完成安装。", s["step"]))
@@ -310,7 +313,7 @@ def build_story(s):
     story.append(Paragraph("安装目录中的主要入口", s["h2"]))
     entry_rows = [
         ["名称", "用途"],
-        ["灵境造片厂", "正式启动入口，使用项目 Logo"],
+        ["灵境 · LingJingAPI", "正式启动入口，使用项目 Logo"],
         ["灵境造片厂示例页.html", "本地纯前端新手页面；填写 URL 和 Key 后自动检测模型并调用生成"],
         ["灵境造片厂使用教学.pdf", "当前使用教学与接口说明"],
         ["models", "用户模型目录，更新客户端时保留"],
@@ -345,7 +348,7 @@ def build_story(s):
         1,
     ):
         story.append(Paragraph(f"{index}. {text}", s["step"]))
-    story.append(note_box("客户端更新只替换程序文件；运行环境、模型、配置、日志和生成结果独立保存。卸载会清理程序、后装运行环境、模型和工作流，但保留 outputs 中的生成资产；重要内容仍请自行备份。", s["body"]))
+    story.append(note_box("客户端更新只替换程序文件；运行环境、模型、配置、日志和生成结果独立保存。卸载不会递归删除模型、生成结果、后装运行环境、用户配置和导入的工作流；完成后会提示模型与生成结果的位置，可自行检查并删除。重要内容仍请独立备份。", s["body"]))
 
     for title, filename, caption in [
         ("图解 1 · 工作流、模型与环境", "workflow-models.png", "演示界面，状态数值为演示数据。工作流按钮集中在右侧，缺失模型可下载或映射已有文件。"),
@@ -389,8 +392,8 @@ def build_story(s):
     story.append(Paragraph("异步任务流程", s["h2"]))
     for index, text in enumerate(
         [
-            "生成接口返回 task_id。",
-            "轮询 GET /v1/tasks/{task_id}，直到状态变为完成或失败。",
+            "生成接口返回 task_id；多个入口共用任务队列，可查看 queue_position。",
+            "轮询 GET /v1/tasks/{task_id}，直到状态变为完成、失败或取消。需要取消时 POST /v1/tasks/{task_id}/cancel。",
             "从响应读取文件名或 URL。",
             "调用 GET /v1/files/{task_id}/{filename} 下载结果。",
         ],
@@ -427,9 +430,9 @@ def build_pdf(output: Path) -> None:
         leftMargin=22 * mm,
         topMargin=22 * mm,
         bottomMargin=20 * mm,
-        title="灵境造片厂使用教学与 API 接口说明",
+        title="灵境 · LingJingAPI 使用教学与 API 接口说明",
         author="Yaro-lu",
-        subject="灵境造片厂轻量客户端使用教学、环境安装与 API 接口说明",
+        subject="灵境 · LingJingAPI 轻量客户端使用教学、环境安装与 API 接口说明",
     )
     document.build(
         build_story(styles()),

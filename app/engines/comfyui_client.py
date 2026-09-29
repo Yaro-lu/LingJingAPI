@@ -57,10 +57,23 @@ class ComfyUIClient:
             raise RuntimeError("ComfyUI image upload returned an invalid subfolder")
         return f"{subfolder}/{name}" if subfolder else name
 
-    def get_queue_status(self) -> Dict:
+    def get_queue_status(self, timeout: int = 30) -> Dict:
         """获取 ComfyUI 队列状态，含当前执行进度"""
-        response = requests.get(f"{self.url}/queue", timeout=30)
+        response = requests.get(f"{self.url}/queue", timeout=timeout)
+        response.raise_for_status()
         return response.json()
+
+    def cancel_prompt(self, prompt_id: str) -> None:
+        """Remove this prompt from ComfyUI's queue or interrupt it if running."""
+        queue = self.get_queue_status(timeout=5)
+        if any(self._queue_item_prompt_id(item) == prompt_id for item in queue.get("queue_pending", [])):
+            response = requests.post(f"{self.url}/queue", json={"delete": [prompt_id]}, timeout=5)
+            response.raise_for_status()
+            # The prompt may have started between the queue read and deletion.
+            queue = self.get_queue_status(timeout=5)
+        if any(self._queue_item_prompt_id(item) == prompt_id for item in queue.get("queue_running", [])):
+            response = requests.post(f"{self.url}/interrupt", json={"prompt_id": prompt_id}, timeout=5)
+            response.raise_for_status()
 
     @staticmethod
     def _queue_item_prompt_id(item: Any) -> str:

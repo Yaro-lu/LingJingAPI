@@ -1,4 +1,4 @@
-; 灵境造片厂 — Windows 10 x64 轻量客户端安装包
+; 灵境 · LingJingAPI — Windows 10 x64 轻量客户端安装包
 ; 该脚本只能读取 build_release.ps1 生成并审核过的 staging 目录。
 ; ComfyUI、Torch、CUDA、Cloudflared 和模型通过独立运行环境包安装。
 
@@ -14,7 +14,7 @@
   #error ReleaseOutputDir must be supplied by scripts/build_release.ps1
 #endif
 
-#define MyAppName "灵境造片厂"
+#define MyAppName "灵境 · LingJingAPI"
 #define MyAppPublisher "Yaro-lu"
 #define MyAppURL "https://github.com/Yaro-lu/LingJingAPI"
 #define MyAppExe "runtime\python\pythonw.exe"
@@ -28,7 +28,7 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
-AppComments=轻量客户端；首次打开后可安装或导入独立 AI 运行环境包
+AppComments=一键调用算力，简单好用。首次打开后可安装或导入独立 AI 运行环境包
 DefaultDirName={localappdata}\Programs\LingJingAI
 DisableDirPage=no
 DefaultGroupName={#MyAppName}
@@ -38,7 +38,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 AllowNoIcons=yes
 DisableProgramGroupPage=yes
-OutputBaseFilename=LingJingAI-Setup-{#MyAppVersion}-win-x64
+OutputBaseFilename=LingJingAPI-Setup-{#MyAppVersion}-win-x64
 OutputDir={#ReleaseOutputDir}
 SetupIconFile={#StageDir}\app\gui\assets\app.ico
 UninstallDisplayIcon={app}\app\gui\assets\app.ico
@@ -53,8 +53,11 @@ UsePreviousAppDir=yes
 UsePreviousGroup=yes
 CreateUninstallRegKey=yes
 Uninstallable=yes
-VersionInfoDescription=灵境造片厂轻量客户端
-VersionInfoProductName=灵境造片厂
+; 2.0.2 的卸载记录包含递归删除 models/runtime。升级时必须舍弃旧记录，
+; 否则默认 append 会在卸载 2.0.3 时执行旧版的删除规则。
+UninstallLogMode=overwrite
+VersionInfoDescription=灵境 · LingJingAPI 轻量客户端
+VersionInfoProductName=灵境 · LingJingAPI
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoVersion={#MyAppVersion}
 
@@ -66,33 +69,19 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; StageDir 已由 build_release.ps1 做过白名单复制、敏感信息扫描和成员校验。
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; 升级时移除旧品牌的快捷方式，保留用户数据和旧文件名的兼容入口。
+Type: files; Name: "{app}\灵境造片厂.lnk"
+Type: files; Name: "{group}\灵境造片厂.lnk"
+Type: files; Name: "{autodesktop}\灵境造片厂.lnk"
+Type: files; Name: "{autodesktop}\灵境造片厂示例页.lnk"
+
 [UninstallDelete]
-; 这些目录可在首次安装后由环境修复、模型下载或工作流导入继续写入。
-; 只删除 {app} 下明确的客户端自有目录，根目录 outputs 不在卸载清单中。
+; 只清理程序生成的代码目录。运行环境中也可能有用户放入的模型，
+; 因此不递归删除 runtime、models、workflows、outputs 或更新备份。
 Type: filesandordirs; Name: "{app}\.venv"
 Type: filesandordirs; Name: "{app}\app"
 Type: filesandordirs; Name: "{app}\bin"
-Type: filesandordirs; Name: "{app}\cache"
-Type: filesandordirs; Name: "{app}\models"
-Type: filesandordirs; Name: "{app}\runtime"
-Type: filesandordirs; Name: "{app}\workflows"
-
-; 清理意外中断的环境安装和 ComfyUI 更新事务残留。
-Type: filesandordirs; Name: "{app}\.runtime-install-staging-*"
-Type: filesandordirs; Name: "{app}\.runtime-install-backup-*"
-Type: filesandordirs; Name: "{app}\.comfyui-update-staging-*"
-Type: filesandordirs; Name: "{app}\.comfyui-update-overlay-*"
-Type: filesandordirs; Name: "{app}\.comfyui-update-backup-*"
-Type: files; Name: "{app}\.comfyui-update-requirements-*.txt"
-Type: files; Name: "{app}\.comfyui-update-release-*.zip"
-Type: files; Name: "{app}\.comfyui-update-release-*.zip.part"
-Type: files; Name: "{app}\.comfyui-update-manifest-*.json"
-Type: files; Name: "{app}\.comfyui-update-manifest-*.json.tmp"
-Type: files; Name: "{app}\.comfyui-update-journal-*.json"
-
-; 本地放在客户端根目录的官方环境包及其校验文件也属于可重新下载内容。
-Type: files; Name: "{app}\runtime-nvidia-*.7z"
-Type: files; Name: "{app}\runtime-nvidia-*.7z.sha256"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -101,7 +90,69 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "{app}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Parameters: "-s -B ""{app}\app\gui\main_gateway.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\gui\assets\app.ico"; Comment: "启动 {#MyAppName}"
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Parameters: "-s -B ""{app}\app\gui\main_gateway.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\gui\assets\app.ico"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Parameters: "-s -B ""{app}\app\gui\main_gateway.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\gui\assets\app.ico"; Tasks: desktopicon
-Name: "{autodesktop}\灵境造片厂示例页"; Filename: "{app}\灵境造片厂示例页.html"; WorkingDir: "{app}"; IconFilename: "{app}\app\gui\assets\app.ico"; Comment: "打开灵境造片厂本地 API 示例页"; Tasks: desktopicon
+Name: "{autodesktop}\灵境 · LingJingAPI 示例页"; Filename: "{app}\灵境造片厂示例页.html"; WorkingDir: "{app}"; IconFilename: "{app}\app\gui\assets\app.ico"; Comment: "打开灵境 · LingJingAPI 本地 API 示例页"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Parameters: "-s -B ""{app}\app\gui\main_gateway.py"""; WorkingDir: "{app}"; Description: "启动 {#MyAppName}"; Flags: postinstall nowait skipifsilent runascurrentuser
+
+[Code]
+var
+  PreservedModelsPath: String;
+  PreservedOutputsPath: String;
+
+function ConfiguredDataPath(const DirectoryName: String): String;
+var
+  Lines: TArrayOfString;
+  I, Separator: Integer;
+  Line, SectionName, KeyName, Value: String;
+begin
+  Result := ExpandConstant('{app}\' + DirectoryName);
+  if not LoadStringsFromFile(ExpandConstant('{app}\runtime\config.local.txt'), Lines) then
+    Exit;
+
+  SectionName := '';
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if Line = '' then
+      Continue;
+    if (Line[1] = '#') or (Line[1] = ';') then
+      Continue;
+    if (Line[1] = '[') and (Line[Length(Line)] = ']') then
+    begin
+      SectionName := Lowercase(Trim(Copy(Line, 2, Length(Line) - 2)));
+      Continue;
+    end;
+    if SectionName <> 'directories' then
+      Continue;
+    Separator := Pos('=', Line);
+    if Separator <= 1 then
+      Continue;
+    KeyName := Lowercase(Trim(Copy(Line, 1, Separator - 1)));
+    if KeyName <> DirectoryName then
+      Continue;
+    Value := Trim(Copy(Line, Separator + 1, Length(Line)));
+    if Value <> '' then
+      Result := Value;
+    Exit;
+  end;
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  PreservedModelsPath := ConfiguredDataPath('models');
+  PreservedOutputsPath := ConfiguredDataPath('outputs');
+  Result := True;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usPostUninstall) and (not UninstallSilent) then
+    SuppressibleMsgBox(
+      '程序卸载已结束。模型和生成结果没有自动删除。' + #13#10#13#10 +
+      '模型位置：' + PreservedModelsPath + #13#10 +
+      '生成结果位置：' + PreservedOutputsPath + #13#10#13#10 +
+      '运行环境、配置和导入的工作流也可能保留在安装目录。' + #13#10 +
+      '确认不再需要后，请自行检查并删除这些文件。',
+      mbInformation, MB_OK, IDOK);
+end;

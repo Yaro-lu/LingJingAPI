@@ -71,6 +71,7 @@ class ConsoleServiceTests(unittest.TestCase):
         app._update_workflow_display = mock.Mock()
         app._dashboard_pages = mock.Mock()
         app._update_task_display = mock.Mock()
+        app._update_generation_queue = mock.Mock()
         data = {"workflows": [{"id": "unchanged"}], "current_task": None}
 
         app._on_health_update(data)
@@ -80,6 +81,7 @@ class ConsoleServiceTests(unittest.TestCase):
         app._update_workflow_display.assert_called_once_with(data)
         app._dashboard_pages.refresh.assert_called_once_with(data)
         app._update_task_display.assert_called_once_with(None)
+        app._update_generation_queue.assert_called_once_with({}, None)
 
     def test_backend_python_disables_user_site_packages(self):
         app = self._app()

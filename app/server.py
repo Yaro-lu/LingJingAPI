@@ -13,6 +13,7 @@ Local AI API Gateway — API 服务器
 import asyncio
 import base64
 import binascii
+from collections import deque
 import io
 import sys
 import json
@@ -743,13 +744,15 @@ def _task_api_response(record: dict) -> dict:
 def _set_task_record(task_id: str, patch: dict):
     with _task_lock:
         record = task_records.get(task_id, {})
+        if record.get("status") == "cancelled":
+            return
         record.update(patch)
         record["updated_at"] = time.time()
         task_records[task_id] = record
         _prune_task_records_locked()
         if current_task.get("task_id") == task_id:
             current_task.update(record)
-        if record.get("status") in {"completed", "failed"}:
+        if record.get("status") in {"completed", "failed", "cancelled"}:
             save_record(config.runtime_dir, record)
 
 
@@ -763,7 +766,7 @@ def _prune_task_records_locked(max_records: int = MAX_TASK_RECORDS):
         (
             (task_id, float(record.get("updated_at") or record.get("started_at_ts") or 0))
             for task_id, record in task_records.items()
-            if task_id != current_id
+            if task_id != current_id and record.get("status") not in {"pending", "reserving", "running", "submitted"}
         ),
         key=lambda item: item[1],
     )
@@ -1047,6 +1050,12 @@ def _prefers_async_image_response(body: dict, prefer_header: str = "") -> bool:
     return False
 
 
+def _submission_status(submitted: dict) -> str:
+    if submitted.get("status") == "cancelled":
+        return "cancelled"
+    return "pending" if submitted.get("queue_position", 0) else "submitted"
+
+
 def _image_task_submission_payload(submitted: dict, model: str) -> dict:
     task_id = str(submitted.get("task_id") or submitted.get("id") or "")
     status_path = f"/v1/tasks/{quote(task_id, safe='')}"
@@ -1055,7 +1064,8 @@ def _image_task_submission_payload(submitted: dict, model: str) -> dict:
         "task_id": task_id,
         "object": "image.generation.task",
         "created": int(time.time()),
-        "status": "submitted",
+        "status": _submission_status(submitted),
+        "queue_position": submitted.get("queue_position", 0),
         "model": model or submitted.get("workflow_id") or "",
         "workflow": submitted.get("workflow_id") or "",
         "workflow_id": submitted.get("workflow_id") or "",
@@ -1080,7 +1090,8 @@ def _workflow_task_submission_payload(
         "task_id": task_id,
         "object": "workflow.task",
         "created": int(time.time()),
-        "status": "submitted",
+        "status": _submission_status(submitted),
+        "queue_position": submitted.get("queue_position", 0),
         "requested_workflow": requested_workflow,
         "workflow": submitted.get("workflow_id") or "",
         "workflow_id": submitted.get("workflow_id") or "",
@@ -1507,7 +1518,50 @@ def create_app() -> FastAPI:
                 if "noise_seed" in inputs:
                     inputs["noise_seed"] = seed
 
-    def _start_workflow_task(workflow_id: Optional[str], body: dict) -> dict:
+    pending_jobs = deque()
+    cancel_events = {}
+    active_task_id = ""
+
+    def _refresh_queue_positions_locked():
+        for position, job in enumerate(pending_jobs, 1):
+            record = task_records.get(job["task_id"])
+            if record and record.get("status") == "pending":
+                record["queue_position"] = position
+
+    def _advance_queue(finished_task_id: str):
+        nonlocal active_task_id
+        next_job = None
+        with _task_lock:
+            if active_task_id != finished_task_id:
+                return
+            cancel_events.pop(finished_task_id, None)
+            active_task_id = ""
+            while pending_jobs:
+                candidate = pending_jobs.popleft()
+                record = task_records.get(candidate["task_id"])
+                if record and record.get("status") == "pending":
+                    next_job = candidate
+                    active_task_id = candidate["task_id"]
+                    record.update(status="reserving", phase="正在提交", progress_label="正在提交", queue_position=0)
+                    current_task.clear()
+                    current_task.update(record)
+                    break
+            _refresh_queue_positions_locked()
+        if next_job:
+            threading.Thread(target=_run_pending_task, args=(next_job,), daemon=True).start()
+
+    def _run_pending_task(job: dict):
+        task_id = job["task_id"]
+        try:
+            _start_workflow_task(job["workflow_id"], job["body"], reserved_task_id=task_id)
+        except Exception as exc:
+            print(f"[API] queued task {task_id} failed ({type(exc).__name__}): {exc}")
+            detail = exc.detail if isinstance(exc, HTTPException) else "任务提交失败，请查看本地日志"
+            _set_task_record(task_id, {"status": "failed", "phase": "提交失败", "error": str(detail)})
+            _advance_queue(task_id)
+
+    def _start_workflow_task(workflow_id: Optional[str], body: dict, *, reserved_task_id: str = "") -> dict:
+        nonlocal active_task_id
         wf = registry.resolve(workflow_id)
         if wf is None:
             raise HTTPException(404, detail=f"Workflow not found: {workflow_id or '(default)'}")
@@ -1515,28 +1569,44 @@ def create_app() -> FastAPI:
         mapped = "api_mapping_status" in mapping
         if not isinstance(body, dict):
             raise HTTPException(422, detail="请求必须是 JSON 对象")
-        body = dict(body) if mapped else _validated_generation_body(body)
-        task_id = f"task_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+        # Queued requests were validated at admission. Re-validating their
+        # normalized defaults would incorrectly mark dimensions/steps explicit.
+        body = dict(body) if mapped or reserved_task_id else _validated_generation_body(body)
+        task_id = reserved_task_id or f"task_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
         reservation = {
             "id": task_id,
             "task_id": task_id,
             "workflow_id": wf.id,
             "workflow_name": wf.name,
+            "prompt_summary": _clean_task_text(body.get("prompt", ""), 220),
+            "title": _task_title_from_body(body, wf.id),
             "status": "reserving",
             "phase": "正在提交",
             "progress_label": "正在提交",
             "progress_percent": 0,
+            "queue_position": 0,
             "started_at_ts": time.time(),
         }
-        with _task_lock:
-            if current_task and current_task.get("status") in (
-                "reserving", "running", "pending", "submitted"
-            ):
-                raise HTTPException(429, detail="已有任务正在执行，请稍后重试")
-            current_task.clear()
-            current_task.update(reservation)
-            task_records[task_id] = dict(reservation)
-            _prune_task_records_locked()
+        if not reserved_task_id:
+            with _task_lock:
+                if active_task_id:
+                    max_pending = max(1, int(getattr(config, "max_pending", 10)))
+                    if len(pending_jobs) >= max_pending:
+                        raise HTTPException(429, detail="任务队列已满，请稍后重试")
+                    reservation.update(status="pending", phase="排队中", progress_label="排队中",
+                                       queue_position=len(pending_jobs) + 1)
+                    pending_jobs.append({"task_id": task_id, "workflow_id": wf.id, "body": body})
+                    cancel_events[task_id] = threading.Event()
+                    task_records[task_id] = dict(reservation)
+                    _prune_task_records_locked()
+                    return _task_api_response(reservation)
+                active_task_id = task_id
+                cancel_events[task_id] = threading.Event()
+                current_task.clear()
+                current_task.update(reservation)
+                task_records[task_id] = dict(reservation)
+                _prune_task_records_locked()
+        cancel_event = cancel_events.setdefault(task_id, threading.Event())
 
         try:
             wf_json_path = _workflow_json_path_for_body(wf, {} if mapped else body)
@@ -1581,19 +1651,35 @@ def create_app() -> FastAPI:
             else:
                 _upload_workflow_images(client, workflow_data, body, task_id)
                 _inject_workflow_params(workflow_data, body)
+            if cancel_event.is_set():
+                _advance_queue(task_id)
+                return _task_api_response(task_records.get(task_id, reservation))
             prompt_id = client.queue_prompt(workflow_data)
+            if cancel_event.is_set():
+                try:
+                    client.cancel_prompt(prompt_id)
+                except Exception as exc:
+                    print(f"[API] cancel prompt {prompt_id} failed ({type(exc).__name__}): {exc}")
+                _advance_queue(task_id)
+                return _task_api_response(task_records.get(task_id, reservation))
         except HTTPException:
             with _task_lock:
-                task_records.pop(task_id, None)
-                if current_task.get("task_id") == task_id:
+                if not reserved_task_id and task_records.get(task_id, {}).get("status") != "cancelled":
+                    task_records.pop(task_id, None)
+                if current_task.get("task_id") == task_id and not reserved_task_id:
                     current_task.clear()
+            if not reserved_task_id:
+                _advance_queue(task_id)
             raise
         except Exception as exc:
             print(f"[API] ComfyUI queue failed ({type(exc).__name__}): {exc}")
             with _task_lock:
-                task_records.pop(task_id, None)
-                if current_task.get("task_id") == task_id:
+                if not reserved_task_id and task_records.get(task_id, {}).get("status") != "cancelled":
+                    task_records.pop(task_id, None)
+                if current_task.get("task_id") == task_id and not reserved_task_id:
                     current_task.clear()
+            if not reserved_task_id:
+                _advance_queue(task_id)
             raise HTTPException(502, detail="ComfyUI 暂不可用，请稍后重试") from None
 
         steps = _workflow_step_count(workflow_data, body.get("steps") or 20)
@@ -1611,6 +1697,7 @@ def create_app() -> FastAPI:
             "progress_label": "排队中",
             "progress_percent": 0,
             "status": "pending",
+            "queue_position": 0,
             "progress": 0,
             "progress_max": steps,
             "started_at": time.strftime("%H:%M:%S"),
@@ -1621,9 +1708,10 @@ def create_app() -> FastAPI:
             "outputs": [],
         }
         with _task_lock:
-            current_task.clear()
-            current_task.update(task_info)
-            task_records[task_id] = dict(task_info)
+            if task_records.get(task_id, {}).get("status") != "cancelled":
+                current_task.clear()
+                current_task.update(task_info)
+                task_records[task_id] = dict(task_info)
 
         req_dir = config.requests_dir
         try:
@@ -1652,7 +1740,15 @@ def create_app() -> FastAPI:
                 progress_high_water = 0
 
                 while True:
+                    if cancel_event.is_set():
+                        try:
+                            c.cancel_prompt(prompt_id)
+                        except Exception as exc:
+                            print(f"[API] cancel prompt {prompt_id} failed ({type(exc).__name__}): {exc}")
+                        return
                     prog = c.get_progress(prompt_id, expected_steps=steps, log_offset=log_offset)
+                    if cancel_event.is_set():
+                        continue
                     elapsed = int(time.time() - start)
                     if prog is None:
                         missing_progress_count += 1
@@ -1668,7 +1764,7 @@ def create_app() -> FastAPI:
                                 "elapsed": elapsed,
                                 "elapsed_seconds": elapsed,
                             })
-                            time.sleep(2)
+                            cancel_event.wait(2)
                             continue
                         raise RuntimeError("ComfyUI 任务结束后未返回 history，无法确认输出文件")
                     missing_progress_count = 0
@@ -1690,9 +1786,13 @@ def create_app() -> FastAPI:
                     })
                     if prog["status"] == "completed":
                         break
-                    time.sleep(2)
+                    cancel_event.wait(2)
 
+                if cancel_event.is_set():
+                    return
                 history = c.get_history(prompt_id)
+                if cancel_event.is_set():
+                    return
                 outputs = []
                 if prompt_id in history:
                     outputs = c.get_output_files(history[prompt_id])
@@ -1715,6 +1815,8 @@ def create_app() -> FastAPI:
                     "status": "failed",
                     "error": "任务执行失败，请查看本地日志",
                 })
+            finally:
+                _advance_queue(task_id)
 
         threading.Thread(target=_bg_execute, daemon=True).start()
         return _task_api_response(task_info)
@@ -1837,6 +1939,8 @@ def create_app() -> FastAPI:
         # 当前任务进度
         with _task_lock:
             task_copy = dict(current_task)
+            queued_tasks = [dict(task_records[job["task_id"]]) for job in pending_jobs
+                            if job["task_id"] in task_records]
         for private_field in ("prompt", "log_offset", "started_at_ts"):
             task_copy.pop(private_field, None)
 
@@ -1882,6 +1986,10 @@ def create_app() -> FastAPI:
             "workflow_count": len(registry.workflows),
             "default_workflow": registry.default_workflow_id,
             "current_task": task_copy if task_copy else None,
+            "task_queue": {
+                "pending_count": len(queued_tasks),
+                "pending": [_task_api_response(item) for item in queued_tasks],
+            },
         }
 
     @app.get("/v1/models")
@@ -1948,7 +2056,8 @@ def create_app() -> FastAPI:
         return {
             "id": task_info["task_id"],
             "task_id": task_info["task_id"],
-            "status": "submitted",
+            "status": _submission_status(task_info),
+            "queue_position": task_info.get("queue_position", 0),
             "workflow": task_info["workflow_id"],
             "workflow_id": task_info["workflow_id"],
             "workflow_name": task_info["workflow_name"],
@@ -2188,6 +2297,45 @@ def create_app() -> FastAPI:
         """获取当前任务执行进度"""
         with _task_lock:
             return _task_api_response(current_task) if current_task else {"status": "idle"}
+
+    @app.get("/v1/tasks/queue")
+    async def task_queue():
+        with _task_lock:
+            active = dict(task_records.get(active_task_id, {})) if active_task_id else {}
+            pending = [dict(task_records[job["task_id"]]) for job in pending_jobs
+                       if job["task_id"] in task_records]
+        return {
+            "active": _task_api_response(active) if active else None,
+            "pending_count": len(pending),
+            "pending": [_task_api_response(record) for record in pending],
+        }
+
+    @app.post("/v1/tasks/{task_id}/cancel")
+    async def cancel_task(task_id: str):
+        with _task_lock:
+            record = task_records.get(task_id)
+            if record is None:
+                raise HTTPException(404, detail="Task not found")
+            if record.get("status") in {"completed", "failed", "cancelled"}:
+                raise HTTPException(409, detail="任务已结束，无法取消")
+            if task_id != active_task_id:
+                pending_jobs_copy = [job for job in pending_jobs if job["task_id"] != task_id]
+                if len(pending_jobs_copy) == len(pending_jobs):
+                    raise HTTPException(409, detail="任务状态已变化，请刷新后重试")
+                pending_jobs.clear()
+                pending_jobs.extend(pending_jobs_copy)
+                cancel_events.pop(task_id, None)
+            else:
+                cancel_events.setdefault(task_id, threading.Event()).set()
+            record.update(status="cancelled", phase="已取消", progress_label="已取消",
+                          queue_position=0, outputs=[], error="任务已取消，结果已丢弃",
+                          updated_at=time.time())
+            if current_task.get("task_id") == task_id:
+                current_task.update(record)
+            _refresh_queue_positions_locked()
+            save_record(config.runtime_dir, record)
+            result = dict(record)
+        return _task_api_response(result)
 
     @app.get("/v1/tasks/{task_id}")
     async def get_task(task_id: str):

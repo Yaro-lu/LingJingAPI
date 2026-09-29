@@ -7,6 +7,8 @@ const html = fs.readFileSync(path.join(__dirname, '../examples/灵境造片厂�
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 class Element {
   constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.children = []; this.value = ''; this.style = {}; this.dataset = {}; this.files = []; this.listeners = {}; this.classList = { toggle() {} }; }
+  set id(value) { this._id = value; nodes.set(value, this); }
+  get id() { return this._id; }
   append(...items) { this.children.push(...items); }
   replaceChildren(...items) { this.children = items; }
   add(item) { this.children.push(item); }
@@ -51,7 +53,7 @@ const context = vm.createContext({
     return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
   }
 });
-new vm.Script(script + '\nglobalThis.hooks = {state, connectClient, selectWorkflow, collectDynamicInputs, workflowCache, invalidateConnection, renderDynamicInputs, pollTask, saveArtwork, loadOlderHistory, renderHistory, projects, deleteProject, gatewayFetch, generate, artworkFilename};').runInContext(context);
+new vm.Script(script + '\nglobalThis.hooks = {state, connectClient, selectWorkflow, collectDynamicInputs, workflowCache, invalidateConnection, renderDynamicInputs, renderProgress, updateProgress, pollTask, saveArtwork, loadOlderHistory, renderHistory, projects, deleteProject, gatewayFetch, generate, artworkFilename};').runInContext(context);
 const hooks = context.hooks;
 const api = context.window.LingJingExample;
 
@@ -145,6 +147,16 @@ const api = context.window.LingJingExample;
   assert.equal(nodes.get('resultStage').children[0].textContent, 'returned text');
   context.fetch = async () => ({ok:true,text:async()=>JSON.stringify({status:'failed',error:'model failed'})});
   await assert.rejects(hooks.pollTask('task', null, 'text'), /model failed/);
+  hooks.state.activeTask = {taskId:'task_cancel_1'};
+  hooks.renderProgress('正在提交任务', '测试工作流');
+  hooks.updateProgress(0, '前面还有 2 个任务', 2);
+  assert.equal(nodes.get('liveProgressTitle').textContent, '排队中 · 第 2 位');
+  assert.equal(nodes.get('cancelTaskButton').textContent, '取消排队');
+  let cancelUrl = '';
+  context.fetch = async url => { cancelUrl = url; return {ok:true,status:200,text:async()=>JSON.stringify({status:'cancelled'})}; };
+  await nodes.get('cancelTaskButton').listeners.click();
+  assert.match(cancelUrl, /\/v1\/tasks\/task_cancel_1\/cancel$/);
+  hooks.state.activeTask = null;
   hooks.state.busy = false;
   const before = nodes.get('projectList').children.length;
   nodes.get('newProject').listeners.click();

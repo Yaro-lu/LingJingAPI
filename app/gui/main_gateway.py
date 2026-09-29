@@ -1,5 +1,5 @@
 """
-灵境造片厂 — 主界面
+灵境 · LingJingAPI — 主界面
 - 启动 ComfyUI + API 服务器 + Cloudflare Tunnel
 - 环境检测 / 运行时检查 / 模型检查
 - 进度监控面板
@@ -23,7 +23,7 @@ import msvcrt
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 import urllib.request as urllib_request
 
 try:
@@ -108,6 +108,14 @@ from app.core.model_maintenance import (  # noqa: E402
     model_file_ready,
     model_file_sha256_matches,
     unsafe_model_files,
+)
+from app.core.quick_repair import (  # noqa: E402
+    QUICK_REPAIR_PROFILES,
+    inspect_existing_profile_models,
+    load_quick_repair_state,
+    profile_for_vram,
+    profile_model_items,
+    save_quick_repair_state,
 )
 from app.core.runtime_state import RuntimeState  # noqa: E402
 from app.core.secret_store import protect_text, unprotect_text  # noqa: E402
@@ -753,6 +761,7 @@ def _check_system_env(run_command=subprocess.run) -> dict:
                 "gpu_name": detected["gpu_name"],
                 "driver_version": detected["driver_version"],
                 "vram_gb": detected["vram_mb"] // 1024,
+                "vram_mb": detected["vram_mb"],
             }
         selected = max(supported, key=lambda gpu: gpu["vram_mb"])
         gpu_name = selected["gpu_name"]
@@ -765,6 +774,7 @@ def _check_system_env(run_command=subprocess.run) -> dict:
                 "gpu_name": gpu_name,
                 "driver_version": driver,
                 "vram_gb": vram_mb // 1024,
+                "vram_mb": vram_mb,
             }
         match = re.match(r"^(\d+)", driver)
         driver_major = int(match.group(1)) if match else 0
@@ -778,12 +788,14 @@ def _check_system_env(run_command=subprocess.run) -> dict:
                 "gpu_name": gpu_name,
                 "driver_version": driver,
                 "vram_gb": vram_mb // 1024,
+                "vram_mb": vram_mb,
             }
         return {
             "success": True,
             "gpu_name": gpu_name,
             "driver_version": driver,
             "vram_gb": vram_mb // 1024,
+            "vram_mb": vram_mb,
         }
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {"success": False, "error": "未检测到 NVIDIA 显卡驱动"}
@@ -795,7 +807,7 @@ def _ensure_extra_model_paths():
     """确保 ComfyUI 的模型路径配置指向当前有效的模型目录。"""
     yaml_path = BASE_DIR / "runtime" / "ComfyUI" / "extra_model_paths.yaml"
     models_path = json.dumps(_models_dir().resolve().as_posix(), ensure_ascii=False)
-    content = f"""# 灵境造片厂 — 自动生成的模型路径配置
+    content = f"""# 灵境 · LingJingAPI — 自动生成的模型路径配置
 comfyui:
     base_path: {models_path}
     checkpoints: checkpoints/
@@ -1000,7 +1012,7 @@ class GatewayApp(WindowBase):
     def __init__(self):
         super().__init__()
         self._tk_destroyed = False
-        self.title("灵境造片厂")
+        self.title("灵境")
         self.geometry(f"{LAYOUT['window_w']}x{LAYOUT['window_h']}")
         self.minsize(LAYOUT["min_w"], LAYOUT["min_h"])
         if CTK_AVAILABLE:
@@ -1056,6 +1068,12 @@ class GatewayApp(WindowBase):
         self._login_prompt_shown = False
         self._login_popup = None
         self._runtime_maintenance_popup = None
+        self._quick_repair_popup = None
+        self._quick_repair_prompt_seen = False
+        self._quick_repair_run = None
+        self._quick_repair_state = load_quick_repair_state(
+            BASE_DIR / "runtime" / "quick_repair.json"
+        )
         self._model_import_in_progress = False
         self._account_status_text = ""
         self._initial_session_sync_done = False
@@ -1077,9 +1095,7 @@ class GatewayApp(WindowBase):
         self._tray_thread = None
 
         # 状态缓存
-        cleanup_incomplete_imports(_models_dir())
-        cleanup_stale_workflow_imports(_workflows_dir(), BASE_DIR / "runtime")
-        self._model_status = _check_models_status()
+        self._model_status = {"all_ok": False, "missing": {}}
         self._environment_status = {}
         self._current_task_text = "无任务"
 
@@ -1542,6 +1558,13 @@ class GatewayApp(WindowBase):
         if self._shutting_down or self._runtime_maintenance_active():
             return
 
+        # Directory walks can be slow on network disks. They belong in the
+        # existing startup worker, never in Tk's first paint path.
+        if not self.__dict__.get("_startup_housekeeping_done", False):
+            cleanup_incomplete_imports(_models_dir())
+            cleanup_stale_workflow_imports(_workflows_dir(), BASE_DIR / "runtime")
+            self._startup_housekeeping_done = True
+
         # Check the package first so first-time users land in the single
         # environment maintenance center instead of the legacy install page.
         missing = missing_runtime_paths(BASE_DIR)
@@ -1560,7 +1583,8 @@ class GatewayApp(WindowBase):
                     self._set_light(key, "offline", "等待安装环境")
             self.after(0, lambda data=result: self._finish_runtime_recheck(data))
             self.after(0, mark_backend_waiting_for_install)
-            self.after(0, self._open_runtime_maintenance)
+            vram_mb = _detect_gpu_memory_mb()
+            self.after(0, lambda m=vram_mb: self._offer_quick_repair(False, m))
             return
 
         self.after(0, lambda: self._set_light("env", "loading", "检查中"))
@@ -1594,8 +1618,10 @@ class GatewayApp(WindowBase):
         environment_result = {
             "package_ready": True,
             "ready": environment_ready,
+            "hardware_ready": bool(system_info.get("success")),
             "missing": [],
             "gpu_name": str(torch_info.get("gpu_name") or system_info.get("gpu_name") or ""),
+            "vram_mb": int(system_info.get("vram_mb") or 0),
             "message": message,
         }
         self.after(0, lambda data=environment_result: self._finish_runtime_recheck(data))
@@ -1610,6 +1636,8 @@ class GatewayApp(WindowBase):
         else:
             self.after(0, lambda: self._set_light("models", "offline", "缺失"))
         self.after(0, self._update_model_display)
+        vram_mb = int(system_info.get("vram_mb") or 0)
+        self.after(0, lambda ready=environment_ready, m=vram_mb: self._offer_quick_repair(ready, m))
 
         # 确保模型路径配置
         _ensure_extra_model_paths()
@@ -1661,8 +1689,8 @@ class GatewayApp(WindowBase):
 
         brand_text = tk.Frame(brand, bg=C["sidebar"])
         brand_text.pack(side="left", fill="x", expand=True)
-        tk.Label(brand_text, text="灵境造片厂", font=("Microsoft YaHei UI", 13, "bold"), fg=C["text"], bg=C["sidebar"]).pack(anchor="w")
-        tk.Label(brand_text, text="LOCAL AI GATEWAY", font=F["tiny"], fg=C["muted"], bg=C["sidebar"]).pack(anchor="w", pady=(2, 0))
+        tk.Label(brand_text, text="灵境", font=("Microsoft YaHei UI", 13, "bold"), fg=C["text"], bg=C["sidebar"]).pack(anchor="w")
+        tk.Label(brand_text, text="一键调用算力，简单好用。", font=F["tiny"], fg=C["muted"], bg=C["sidebar"]).pack(anchor="w", pady=(2, 0))
 
         tk.Frame(self._sidebar, bg=C["sidebar_border"], height=1).pack(fill="x", padx=14, pady=(0, 12))
         tk.Label(self._sidebar, text="工作台", font=F["tiny"], fg=C["muted"], bg=C["sidebar"]).pack(anchor="w", padx=22, pady=(0, 7))
@@ -1884,6 +1912,462 @@ class GatewayApp(WindowBase):
         dashboard = getattr(self, "_dashboard_pages", None)
         if dashboard is not None:
             self.after_idle(dashboard.focus_runtime_maintenance)
+
+    def _save_quick_repair_state(self, *, dismissed=None, pending_profile=None):
+        state = self._quick_repair_state
+        if dismissed is not None:
+            state["dismissed"] = bool(dismissed)
+        if pending_profile is not None:
+            state["pending_profile"] = pending_profile
+        save_quick_repair_state(
+            BASE_DIR / "runtime" / "quick_repair.json",
+            dismissed=state["dismissed"],
+            pending_profile=state["pending_profile"],
+        )
+
+    def _offer_quick_repair(self, environment_ready: bool, vram_mb: int):
+        """Only the background startup worker may request this lightweight prompt."""
+        if (
+            self._shutting_down
+            or self.__dict__.get("_quick_repair_prompt_seen", False)
+            or "_quick_repair_state" not in self.__dict__
+        ):
+            return
+        state = self._quick_repair_state
+        pending = state.get("pending_profile")
+        profile = pending or profile_for_vram(vram_mb)
+        missing_models = bool(
+            profile
+            and any(
+                self._model_status.get(group) != "完整"
+                for group in QUICK_REPAIR_PROFILES[profile]["groups"]
+            )
+        )
+        if not pending and (state.get("dismissed") or (environment_ready and not missing_models)):
+            return
+        self._quick_repair_prompt_seen = True
+        self.after(
+            250,
+            lambda: self._show_quick_repair_dialog(
+                initial_profile=profile,
+                vram_mb=vram_mb,
+                auto_resume=bool(pending and environment_ready),
+            ),
+        )
+
+    def _show_quick_repair_dialog(
+        self,
+        *,
+        initial_profile: str | None = None,
+        vram_mb: int = 0,
+        auto_resume: bool = False,
+    ):
+        existing = self._quick_repair_popup
+        if existing is not None:
+            try:
+                if existing["popup"].winfo_exists():
+                    existing["popup"].lift()
+                    return
+            except (RuntimeError, tk.TclError):
+                pass
+        vram_mb = int(vram_mb or self._environment_status.get("vram_mb") or 0)
+        selected = initial_profile or self._quick_repair_state.get("pending_profile")
+        if selected not in QUICK_REPAIR_PROFILES:
+            selected = profile_for_vram(vram_mb)
+        popup = tk.Toplevel(self)
+        popup.title("环境安装与修复")
+        popup.configure(bg=C["bg"])
+        popup.transient(self)
+        popup.resizable(False, False)
+        self._center_popup(popup, 760, 680)
+        panel = self._card(popup, fill="both", expand=True, padx=12, pady=12)
+        body = tk.Frame(panel, bg=C["card"])
+        body.pack(fill="both", expand=True, padx=24, pady=(18, 14))
+        tk.Label(body, text="环境安装与修复", font=F["title"], fg=C["text"], bg=C["card"]).pack(anchor="w")
+        tk.Label(
+            body,
+            text="首次安装或环境异常时，准备文字、图片、视频生成所需的运行环境与模型。",
+            font=F["normal"], fg=C["text2"], bg=C["card"],
+        ).pack(anchor="w", pady=(6, 14))
+        detected = (
+            f"检测到显存约 {vram_mb / 1024:.1f} GB，已自动选择档位"
+            if vram_mb else "未能识别显存，请手动选择档位"
+        )
+        tk.Label(body, text=detected, font=F["small"], fg=C["warn"], bg=C["card"]).pack(anchor="w", pady=(0, 12))
+
+        profile_var = tk.StringVar(value=selected or "")
+        cards = tk.Frame(body, bg=C["card"])
+        cards.pack(fill="x")
+        option_frames = {}
+
+        def select_profile():
+            for key, card in option_frames.items():
+                card.configure(highlightbackground=C["primary"] if key == profile_var.get() else C["border2"])
+
+        for index, (key, spec) in enumerate(QUICK_REPAIR_PROFILES.items()):
+            card = tk.Frame(cards, bg=C["card"], highlightthickness=2, highlightbackground=C["border2"])
+            card.grid(row=0, column=index, sticky="nsew", padx=(0, 8) if index == 0 else (8, 0))
+            cards.columnconfigure(index, weight=1, uniform="repair-profile")
+            option_frames[key] = card
+            tk.Radiobutton(
+                card, text=spec["label"], variable=profile_var, value=key,
+                command=select_profile, font=F["h2"], fg=C["text"], bg=C["card"],
+                activebackground=C["card"], selectcolor=C["card"],
+            ).pack(anchor="w", padx=12, pady=(12, 9))
+            for label, name in zip(("文字模型", "图片模型", "视频模型"), spec["names"]):
+                row = tk.Frame(card, bg=C["card"])
+                row.pack(fill="x", padx=16, pady=(4, 7))
+                tk.Label(row, text=label, font=F["small"], fg=C["text2"], bg=C["card"], width=9, anchor="w").pack(side="left")
+                tk.Label(row, text=name, font=F["bold"], fg=C["text"], bg=C["card"], anchor="w").pack(side="left")
+            tk.Label(
+                card, text="已有模型会复用，只补齐缺失文件", font=F["small"],
+                fg=C["muted"], bg=C["card"],
+            ).pack(anchor="w", padx=16, pady=(9, 13))
+        select_profile()
+
+        tk.Label(body, text="修复流程", font=F["h2"], fg=C["text"], bg=C["card"]).pack(anchor="w", pady=(22, 9))
+        steps = tk.Frame(body, bg=C["soft_primary"])
+        steps.pack(fill="x")
+        for title, description in (
+            ("1  修复环境", "安装运行组件"),
+            ("2  补齐模型", "下载并校验文件"),
+            ("3  启动服务", "加载工作流"),
+            ("4  验证可用", "检查图文视频"),
+        ):
+            column = tk.Frame(steps, bg=C["soft_primary"])
+            column.pack(side="left", fill="x", expand=True, padx=13, pady=12)
+            tk.Label(column, text=title, font=F["bold"], fg=C["text"], bg=C["soft_primary"]).pack(anchor="w")
+            tk.Label(column, text=description, font=F["small"], fg=C["text2"], bg=C["soft_primary"]).pack(anchor="w", pady=(5, 0))
+
+        status_var = tk.StringVar(value="就绪。点击一键修复后，将按顺序处理缺失项。")
+        tk.Label(
+            body, textvariable=status_var, font=F["small"], fg=C["text2"], bg=C["card"],
+            justify="left", anchor="w", wraplength=680,
+        ).pack(fill="x", pady=(20, 8))
+        progress_var = tk.DoubleVar(value=0)
+        ttk.Progressbar(
+            body, variable=progress_var, maximum=100,
+            style="Progress.Horizontal.TProgressbar",
+        ).pack(fill="x")
+        tk.Label(
+            body, text="失败时保留已完成文件和下载断点，并显示原因。",
+            font=F["small"], fg=C["muted"], bg=C["card"],
+        ).pack(anchor="w", pady=(9, 0))
+
+        footer = tk.Frame(panel, bg=C["card"])
+        footer.pack(side="bottom", fill="x", padx=24, pady=(4, 18))
+        skip_var = tk.BooleanVar(value=bool(self._quick_repair_state.get("dismissed")))
+        skip_check = tk.Checkbutton(
+            footer, text="下次不显示", variable=skip_var, font=F["normal"],
+            fg=C["text2"], bg=C["card"], selectcolor=C["card"],
+            activebackground=C["card"],
+        )
+        skip_check.pack(side="left")
+        start_button = self._button(footer, "一键修复", self._begin_quick_repair, "primary", width=125)
+        start_button.pack(side="right", padx=(10, 0), ipady=5)
+        cancel_button = self._button(footer, "取消", self._close_quick_repair_dialog, "plain", width=95)
+        cancel_button.pack(side="right", ipady=5)
+        popup.protocol("WM_DELETE_WINDOW", self._close_quick_repair_dialog)
+        popup.grab_set()
+        self._quick_repair_popup = {
+            "popup": popup,
+            "profile_var": profile_var,
+            "status_var": status_var,
+            "progress_var": progress_var,
+            "skip_var": skip_var,
+            "skip_check": skip_check,
+            "start_button": start_button,
+            "cancel_button": cancel_button,
+            "option_frames": option_frames,
+        }
+        if auto_resume:
+            self.after(300, self._begin_quick_repair)
+
+    def _close_quick_repair_dialog(self):
+        dialog = self._quick_repair_popup
+        if dialog is None:
+            return
+        run = self._quick_repair_run
+        if run is not None:
+            run["cancelled"].set()
+            if run.get("phase") == "models":
+                current = run.get("current")
+                if current is not None:
+                    self._pause_model_download(current)
+            self._detach_model_download_views(run.get("controls", []))
+            self._quick_repair_run = None
+        self._save_quick_repair_state(
+            dismissed=dialog["skip_var"].get(), pending_profile=""
+        )
+        popup = dialog["popup"]
+        self._quick_repair_popup = None
+        try:
+            popup.grab_release()
+        except (RuntimeError, tk.TclError):
+            pass
+        popup.destroy()
+
+    def _begin_quick_repair(self):
+        dialog = self._quick_repair_popup
+        if dialog is None or self._shutting_down:
+            return
+        if "ready" not in self._environment_status:
+            dialog["status_var"].set("正在后台检查运行环境，请稍候再开始修复。")
+            return
+        profile = dialog["profile_var"].get()
+        if profile not in QUICK_REPAIR_PROFILES:
+            dialog["status_var"].set("请先选择显存档位。")
+            return
+        old_run = self._quick_repair_run
+        if old_run is not None:
+            old_run["cancelled"].set()
+            self._detach_model_download_views(old_run.get("controls", []))
+            hidden = old_run.get("hidden")
+            if hidden is not None:
+                hidden.destroy()
+        try:
+            self._save_quick_repair_state(
+                dismissed=dialog["skip_var"].get(), pending_profile=profile
+            )
+            items = profile_model_items(profile)
+        except (OSError, ValueError) as exc:
+            dialog["status_var"].set(f"无法开始修复：{exc}")
+            return
+        for option in dialog["option_frames"].values():
+            for child in option.winfo_children():
+                if isinstance(child, tk.Radiobutton):
+                    child.configure(state="disabled")
+        dialog["skip_check"].configure(state="disabled")
+        dialog["start_button"].configure(state="disabled", text="修复中")
+        dialog["cancel_button"].configure(text="暂停并关闭")
+        self._quick_repair_run = {
+            "profile": profile,
+            "items": items,
+            "phase": "prepare",
+            "controls": [],
+            "index": 0,
+            "current": None,
+            "hidden": None,
+            "cancelled": threading.Event(),
+        }
+        if not self._environment_status.get("ready"):
+            if (
+                self._environment_status.get("package_ready")
+                and self._environment_status.get("hardware_ready") is False
+            ):
+                self._quick_repair_fail(
+                    f"显卡或驱动检查未通过：{self._environment_status.get('message') or '请先检查 NVIDIA 驱动'}。"
+                    "运行环境包无法修复显卡驱动。"
+                )
+                return
+            try:
+                local_package = BASE_DIR / RUNTIME_PACKAGE_NAME
+                url = self._runtime_mirror_url()
+                if not local_package.is_file() and not url:
+                    raise ValueError("没有可用的运行环境包或下载地址")
+            except (OSError, ValueError) as exc:
+                self._quick_repair_fail(f"运行环境下载源不可用：{exc}")
+                return
+            dialog["status_var"].set("正在准备运行环境；完成文件替换后客户端会自动重启并继续下载模型。")
+            dialog["progress_var"].set(3)
+            popup = dialog["popup"]
+            try:
+                popup.grab_release()
+            except (RuntimeError, tk.TclError):
+                pass
+            self._quick_repair_popup = None
+            self._quick_repair_run = None
+            popup.destroy()
+            if local_package.is_file():
+                self._extract_runtime(local_package, repair_confirmed=True, auto_restart=True)
+            else:
+                self._download_runtime(url, repair_confirmed=True, auto_restart=True)
+            return
+
+        run = self._quick_repair_run
+        run["phase"] = "checking"
+        dialog["status_var"].set("正在核对已有模型的 SHA256；此检查只在点击修复后进行。")
+
+        def inspect_models():
+            try:
+                def report(index, total, name):
+                    self.after(
+                        0,
+                        lambda i=index, n=total, label=name: self._quick_repair_check_progress(
+                            run, i, n, label
+                        ),
+                    )
+
+                missing, invalid = inspect_existing_profile_models(
+                    _models_dir(), profile, on_file=report, cancelled=run["cancelled"]
+                )
+                self.after(
+                    0, lambda: self._quick_repair_prepare_downloads(run, missing, invalid)
+                )
+            except Exception as exc:
+                self.after(
+                    0,
+                    lambda error=str(exc): self._quick_repair_fail(error)
+                    if self._quick_repair_run is run else None,
+                )
+
+        threading.Thread(target=inspect_models, daemon=True).start()
+
+    def _quick_repair_check_progress(self, run: dict, index: int, total: int, name: str):
+        if self._quick_repair_run is not run or self._quick_repair_popup is None:
+            return
+        self._quick_repair_popup["status_var"].set(
+            f"核对已有模型 {index}/{total}：{Path(name).name}"
+        )
+        self._quick_repair_popup["progress_var"].set(3 + 7 * index / max(1, total))
+
+    def _quick_repair_prepare_downloads(
+        self, run: dict, missing: list[dict], invalid: list[Path]
+    ):
+        if self._quick_repair_run is not run or self._quick_repair_popup is None:
+            return
+        try:
+            models_dir = _models_dir()
+            models_dir.mkdir(parents=True, exist_ok=True)
+            remaining = 0
+            for item in missing:
+                target = models_dir / item["path"]
+                partial = target.with_suffix(target.suffix + ".part")
+                partial_size = partial.stat().st_size if partial.is_file() else 0
+                remaining += max(0, int(item["size_bytes"]) - partial_size)
+            if remaining and shutil.disk_usage(models_dir).free < remaining:
+                raise RuntimeError(
+                    f"模型目录空间不足，还需约 {remaining / 1024**3:.1f} GB。"
+                    "请先腾出空间，或在设置中修改模型位置。"
+                )
+            for target in invalid:
+                backup = target.with_name(f"{target.name}.invalid-{uuid.uuid4().hex[:8]}")
+                os.replace(target, backup)
+            hidden = tk.Frame(self._quick_repair_popup["popup"], bg=C["card"])
+            controls = [
+                self._build_model_download_row(hidden, "quick-repair", item, index)
+                for index, item in enumerate(missing, 1)
+            ]
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._quick_repair_fail(str(exc))
+            return
+        run.update(phase="models", controls=controls, hidden=hidden)
+        self._quick_repair_next_model(run)
+
+    def _quick_repair_next_model(self, run: dict):
+        if self._quick_repair_run is not run or self._quick_repair_popup is None:
+            return
+        controls = run["controls"]
+        while run["index"] < len(controls):
+            control = self._model_download_owner(controls[run["index"]])
+            if control.get("state") == "done":
+                run["index"] += 1
+                continue
+            run["current"] = control
+            self._start_model_download(control)
+            self._quick_repair_poll_model(run)
+            return
+        run["current"] = None
+        self._quick_repair_verify(run)
+
+    def _quick_repair_poll_model(self, run: dict):
+        if self._quick_repair_run is not run or self._quick_repair_popup is None:
+            return
+        control = self._model_download_owner(run["current"])
+        state = str(control.get("state") or "")
+        if state == "done":
+            run["index"] += 1
+            self._quick_repair_next_model(run)
+            return
+        if state in {"failed", "cancelled"}:
+            self._quick_repair_fail(
+                f"{Path(control['item']['path']).name}：{control.get('status_text') or '下载未完成'}"
+            )
+            return
+        dialog = self._quick_repair_popup
+        total = max(1, len(run["controls"]))
+        percent = float(control.get("progress_percent") or 0)
+        dialog["progress_var"].set(10 + 75 * (run["index"] + percent / 100) / total)
+        dialog["status_var"].set(
+            f"下载模型 {run['index'] + 1}/{total}："
+            f"{Path(control['item']['path']).name}\n"
+            f"{control.get('status_text') or '正在连接下载源'}"
+        )
+        self.after(600, lambda: self._quick_repair_poll_model(run))
+
+    def _quick_repair_verify(self, run: dict):
+        if self._quick_repair_run is not run or self._quick_repair_popup is None:
+            return
+        run["phase"] = "verify"
+        dialog = self._quick_repair_popup
+        dialog["status_var"].set("模型文件已准备完毕，正在重启后台并核对图文视频工作流。")
+        dialog["progress_var"].set(88)
+        run.setdefault("verify_deadline", time.monotonic() + 180)
+        if not self._restart_backend():
+            if time.monotonic() >= run["verify_deadline"]:
+                self._quick_repair_fail("后台正在执行其他操作，暂时无法重启并验证工作流。")
+            else:
+                self.after(2000, lambda: self._quick_repair_verify(run))
+            return
+        run["health_event_before"] = self._health_event_applied
+        self._start_background_model_recheck()
+        self.after(2500, lambda: self._quick_repair_check_workflows(run))
+
+    def _quick_repair_check_workflows(self, run: dict):
+        if self._quick_repair_run is not run or self._quick_repair_popup is None:
+            return
+        health = self._last_health or {}
+        workflows = {
+            str(item.get("id") or ""): item
+            for item in (health.get("workflows") or [])
+            if isinstance(item, dict)
+        }
+        expected = QUICK_REPAIR_PROFILES[run["profile"]]["workflows"]
+        fresh = self._health_event_applied > run["health_event_before"]
+        online = (health.get("comfyui") or {}).get("status") == "online"
+        if fresh and online and all(workflows.get(key, {}).get("available") for key in expected):
+            self._save_quick_repair_state(pending_profile="")
+            run["phase"] = "complete"
+            dialog = self._quick_repair_popup
+            dialog["progress_var"].set(100)
+            dialog["status_var"].set("修复完成。文字、图片和视频工作流已通过服务端可用性检查。")
+            dialog["start_button"].configure(state="normal", text="完成", command=self._close_quick_repair_dialog)
+            dialog["cancel_button"].configure(text="关闭")
+            return
+        if fresh and online:
+            missing_nodes = [
+                f"{workflows[key].get('name') or key}：{', '.join(workflows[key].get('missing_nodes') or [])}"
+                for key in expected
+                if key in workflows and workflows[key].get("missing_nodes")
+            ]
+            if missing_nodes:
+                self._quick_repair_fail(
+                    "工作流仍缺少节点 " + "；".join(missing_nodes)[:260]
+                    + "。请在模型与环境页修复对应组件。"
+                )
+                return
+        if time.monotonic() >= run["verify_deadline"]:
+            missing = [key for key in expected if not workflows.get(key, {}).get("available")]
+            detail = "、".join(missing) if missing else "ComfyUI 未就绪"
+            self._quick_repair_fail(f"模型已准备，但服务端尚未确认以下工作流可用：{detail}。请查看模型与环境页的具体状态。")
+            return
+        self.after(2000, lambda: self._quick_repair_check_workflows(run))
+
+    def _quick_repair_fail(self, message: str):
+        dialog = self._quick_repair_popup
+        if dialog is None:
+            return
+        if self._quick_repair_run is not None:
+            self._quick_repair_run["phase"] = "failed"
+        self._save_quick_repair_state(pending_profile="")
+        dialog["status_var"].set(f"修复未完成：{message[:400]}")
+        dialog["start_button"].configure(state="normal", text="重试")
+        dialog["cancel_button"].configure(text="关闭")
+        for option in dialog["option_frames"].values():
+            for child in option.winfo_children():
+                if isinstance(child, tk.Radiobutton):
+                    child.configure(state="normal")
+        dialog["skip_check"].configure(state="normal")
 
     # ══════════════════════════════════════════════════════
     # 顶栏：品牌 + 账号信息
@@ -2426,7 +2910,7 @@ class GatewayApp(WindowBase):
     def _build_progress_panel(self):
         parent = getattr(self, "_right_panel_parent", self)
         self._prog_frame = self._card(parent)
-        self._prog_frame.configure(height=300)
+        self._prog_frame.configure(height=248)
         self._prog_frame.pack(fill="both", expand=True)
         self._prog_frame.pack_propagate(False)
 
@@ -2437,6 +2921,15 @@ class GatewayApp(WindowBase):
             task_head, text="当前任务", font=F["h2"],
             fg=C["text"], bg=C["card"], anchor="w")
         self._task_status_label.pack(side="left", fill="x", expand=True)
+        self._queue_view_btn = tk.Button(
+            task_head, text="排队 0 个", font=F["small"], bg=C["card"], fg=C["primary"],
+            relief="flat", bd=0, cursor="hand2", command=self._show_generation_queue,
+        )
+        self._queue_view_btn.pack(side="right", padx=(8, 0))
+        self._cancel_current_task_btn = tk.Button(
+            task_head, text="强制取消", font=F["small"], bg=C["card"], fg=C["error"],
+            relief="flat", bd=0, cursor="hand2", command=self._cancel_current_generation,
+        )
         self._preview_output_btn = tk.Button(
             task_head,
             text="预览结果",
@@ -2527,9 +3020,117 @@ class GatewayApp(WindowBase):
         self._render_task_history()
         self._redraw_progress_bar()
 
+    def _update_generation_queue(self, queue_state: dict, active_task: dict = None):
+        pending = list(queue_state.get("pending") or [])
+        self._generation_queue_snapshot = {"active": active_task or {}, "pending": pending}
+        self._queue_view_btn.config(text=f"排队 {len(pending)} 个")
+        active_status = str((active_task or {}).get("status") or "")
+        if active_status in {"reserving", "pending", "submitted", "running"}:
+            if not self._cancel_current_task_btn.winfo_ismapped():
+                self._cancel_current_task_btn.pack(side="right", padx=(8, 0))
+        elif self._cancel_current_task_btn.winfo_ismapped():
+            self._cancel_current_task_btn.pack_forget()
+        modal = self.__dict__.get("_generation_queue_modal")
+        if modal is not None and modal.winfo_exists():
+            self._render_generation_queue_modal()
+
+    def _show_generation_queue(self):
+        modal = self.__dict__.get("_generation_queue_modal")
+        if modal is not None and modal.winfo_exists():
+            modal.lift()
+            return
+        modal = tk.Toplevel(self)
+        modal.title("灵境 · 任务队列")
+        modal.geometry("570x480")
+        modal.configure(bg=C["bg"])
+        self._generation_queue_modal = modal
+        self._generation_queue_signature = None
+        tk.Label(modal, text="任务队列", font=F["h2"], fg=C["text"], bg=C["bg"]).pack(
+            anchor="w", padx=18, pady=(16, 4))
+        tk.Label(modal, text="按提交时间执行；取消后丢弃该任务的结果。", font=F["small"],
+                 fg=C["muted"], bg=C["bg"]).pack(anchor="w", padx=18, pady=(0, 12))
+        container = tk.Frame(modal, bg=C["bg"])
+        container.pack(fill="both", expand=True, padx=18, pady=(0, 16))
+        canvas = tk.Canvas(container, bg=C["bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self._generation_queue_rows = tk.Frame(canvas, bg=C["bg"])
+        canvas_window = canvas.create_window((0, 0), window=self._generation_queue_rows, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
+        self._generation_queue_rows.bind(
+            "<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        self._render_generation_queue_modal()
+
+    def _render_generation_queue_modal(self):
+        rows = self.__dict__.get("_generation_queue_rows")
+        if rows is None or not rows.winfo_exists():
+            return
+        snapshot = self.__dict__.get("_generation_queue_snapshot") or {}
+        active = snapshot.get("active") or {}
+        pending = snapshot.get("pending") or []
+        items = ([active] if active.get("status") in {"reserving", "pending", "submitted", "running"} else []) + pending
+        signature = tuple((item.get("task_id"), item.get("status"), item.get("queue_position")) for item in items)
+        if signature == self.__dict__.get("_generation_queue_signature"):
+            return
+        self._generation_queue_signature = signature
+        for child in rows.winfo_children():
+            child.destroy()
+        if not items:
+            tk.Label(rows, text="当前没有运行或排队的任务", font=F["normal"],
+                     fg=C["muted"], bg=C["bg"]).pack(anchor="w", pady=12)
+            return
+        for item in items:
+            task_id = str(item.get("task_id") or "")
+            position = int(item.get("queue_position") or 0)
+            label = "运行中" if position == 0 else f"排队第 {position} 位"
+            name = str(item.get("workflow_name") or item.get("workflow_id") or "工作流")
+            summary = str(item.get("title") or item.get("prompt_summary") or "").strip()
+            description = f"{label} · {name}" + (f" · {summary[:24]}" if summary else "")
+            row = tk.Frame(rows, bg=C["card"])
+            row.pack(fill="x", pady=(0, 6), ipady=7)
+            tk.Label(row, text=description, font=F["normal"], wraplength=370, justify="left",
+                     fg=C["text"], bg=C["card"], anchor="w").pack(side="left", fill="x", expand=True, padx=12)
+            tk.Button(row, text="强制取消" if position == 0 else "取消排队", font=F["small"],
+                      bg=C["card"], fg=C["error"], relief="flat", bd=0,
+                      cursor="hand2", command=lambda tid=task_id: self._cancel_generation_task(tid)).pack(side="right", padx=12)
+
+    def _cancel_current_generation(self):
+        task = (self.__dict__.get("_generation_queue_snapshot") or {}).get("active") or {}
+        task_id = str(task.get("task_id") or "")
+        if task_id:
+            self._cancel_generation_task(task_id)
+
+    def _cancel_generation_task(self, task_id: str):
+        if not re.fullmatch(r"task_[A-Za-z0-9_]+", task_id):
+            return
+        inflight = self.__dict__.setdefault("_generation_cancel_inflight", set())
+        if task_id in inflight:
+            return
+        inflight.add(task_id)
+        self._cancel_current_task_btn.config(state="disabled")
+
+        def request_cancel():
+            try:
+                request = urllib_request.Request(
+                    f"{API_BASE}/v1/tasks/{quote(task_id, safe='')}/cancel",
+                    data=b"", headers=self._local_api_headers(), method="POST",
+                )
+                with urllib_request.urlopen(request, timeout=15):
+                    pass
+                self.after(0, lambda: self._footer_label.config(text="  任务已取消，结果将被丢弃"))
+            except Exception as exc:
+                self.after(0, lambda error=str(exc): messagebox.showerror("取消任务失败", error))
+            finally:
+                self.after(0, lambda: (
+                    inflight.discard(task_id), self._cancel_current_task_btn.config(state="normal")))
+
+        threading.Thread(target=request_cancel, daemon=True).start()
+
     def _update_task_display(self, task: dict = None):
         """更新任务状态显示"""
-        if task and task.get("status") in ("running", "pending", "submitted"):
+        if task and task.get("status") in ("reserving", "running", "pending", "submitted"):
             self._last_terminal_task_signature = ""
             context_text = self._task_context_text(task)
             self._current_task_text = f"正在生成：{context_text}"
@@ -2588,18 +3189,19 @@ class GatewayApp(WindowBase):
             self._remember_task_history(task)
             self.after(15000, self._hide_progress)
 
-        elif task and task.get("status") == "failed":
+        elif task and task.get("status") in ("failed", "cancelled"):
+            cancelled = task.get("status") == "cancelled"
             self._current_task_text = "失败"
             self._last_completed_outputs = []
             self._last_completed_task_id = ""
             if self._preview_output_btn.winfo_ismapped():
                 self._preview_output_btn.pack_forget()
             self._show_progress_panel()
-            self._task_status_label.config(text="当前任务：失败", fg=C["error"])
+            self._task_status_label.config(text="当前任务：已取消" if cancelled else "当前任务：失败", fg=C["error"])
             err = task.get("error", "未知错误")
             self._prog_info.config(text=self._task_context_text(task))
             self._workflow_info.config(text=f"工作流：{task.get('workflow_id', task.get('workflow_name', '默认工作流'))}")
-            self._set_progress_bar(0, "失败")
+            self._set_progress_bar(0, "已取消" if cancelled else "失败")
             self._prog_detail.config(text=f"错误：{err}")
             self.after(15000, self._hide_progress)
 
@@ -6300,7 +6902,12 @@ class GatewayApp(WindowBase):
             )
         return None
 
-    def _download_runtime(self, url: str, repair_confirmed: bool = False):
+    def _download_runtime(
+        self, url: str, repair_confirmed: bool = False, auto_restart: bool = False
+    ):
+        extract_options = {"repair_confirmed": repair_confirmed}
+        if auto_restart:
+            extract_options["auto_restart"] = True
         dialog = self._create_runtime_progress_dialog(
             title="安装运行环境",
             heading="正在准备运行环境",
@@ -6349,7 +6956,7 @@ class GatewayApp(WindowBase):
                             100,
                             lambda: self._extract_runtime(
                                 target,
-                                repair_confirmed=repair_confirmed,
+                                **extract_options,
                             ),
                         )
                         return
@@ -6381,7 +6988,13 @@ class GatewayApp(WindowBase):
                 )
 
                 self.after(0, lambda: self._close_maintenance_dialog(dialog))
-                self.after(100, lambda: self._extract_runtime(target, repair_confirmed=repair_confirmed))
+                self.after(
+                    100,
+                    lambda: self._extract_runtime(
+                        target,
+                        **extract_options,
+                    ),
+                )
             except Exception as ex:
                 if not self._shutting_down:
                     self.after(0, lambda e=str(ex): show_download_error(e))
@@ -6396,7 +7009,10 @@ class GatewayApp(WindowBase):
         if path:
             self._extract_runtime(Path(path))
 
-    def _extract_runtime(self, pkg_path: Path, repair_confirmed: bool = False):
+    def _extract_runtime(
+        self, pkg_path: Path, repair_confirmed: bool = False,
+        auto_restart: bool = False,
+    ):
         """解压 runtime 包"""
         if _runtime_has_package_files() and not repair_confirmed:
             if not messagebox.askyesno(
@@ -6581,10 +7197,11 @@ class GatewayApp(WindowBase):
                 set_install_stage("validate")
                 validate_staged_runtime(staging_dir)
 
-                if not self._show_runtime_manual_restart_notice(dialog):
-                    if self._shutting_down:
-                        return
-                    raise RuntimeError("未能显示手动重启提示，运行环境尚未切换")
+                if not auto_restart:
+                    if not self._show_runtime_manual_restart_notice(dialog):
+                        if self._shutting_down:
+                            return
+                        raise RuntimeError("未能显示手动重启提示，运行环境尚未切换")
 
                 set_install_stage("stop_services")
                 maintenance_started, running_before, stop_error = self._begin_runtime_maintenance()
@@ -6598,6 +7215,7 @@ class GatewayApp(WindowBase):
                     BASE_DIR,
                     staging_dir,
                     parent_pid=os.getpid(),
+                    restart_client=auto_restart,
                 )
                 handoff_started = True
                 maintenance_started = False
@@ -7468,7 +8086,7 @@ class GatewayApp(WindowBase):
         title_row.pack(fill="x", padx=28, pady=(22, 8))
         tk.Label(title_row, text="▷", font=("Microsoft YaHei UI", 18, "bold"),
                  fg="#ffffff", bg=C["primary"], width=3).pack(side="left", padx=(0, 10), ipady=4)
-        tk.Label(title_row, text="登录灵境造片厂账号", font=F["title"],
+        tk.Label(title_row, text="登录灵境 · LingJingAPI 账号", font=F["title"],
                  fg=C["text"], bg=C["card"]).pack(side="left")
         tk.Label(
             panel,
@@ -8032,7 +8650,7 @@ class GatewayApp(WindowBase):
         messagebox.showinfo(
             action,
             f"{label}将使用：\n{saved}\n\n"
-            "请退出并重新打开灵境造片厂后生效。\n"
+            "请退出并重新打开灵境 · LingJingAPI 后生效。\n"
             "原目录中的文件不会自动搬移；如果所选目录以后不存在，客户端会自动恢复默认位置。",
             parent=self,
         )
@@ -8860,7 +9478,7 @@ class GatewayApp(WindowBase):
     def _restart_backend(self):
         """重启所有后台服务"""
         if not self._begin_backend_action("重启后台"):
-            return
+            return False
         self._footer_label.config(text="  正在重启后台服务...")
         self._clear_public_url()
         for key in ("comfyui", "api", "tunnel"):
@@ -8870,6 +9488,7 @@ class GatewayApp(WindowBase):
         except Exception:
             self._end_backend_action()
             raise
+        return True
 
     def _restart_backend_worker(self):
         try:
@@ -9384,6 +10003,7 @@ class GatewayApp(WindowBase):
         # 进度更新
         task = data.get("current_task")
         self._update_task_display(task)
+        self._update_generation_queue(data.get("task_queue") or {}, task)
 
     def _update_status(self, data: dict):
         url = data.get("base_url", "")
@@ -9781,7 +10401,7 @@ class GatewayApp(WindowBase):
                 pystray.MenuItem("显示窗口", self._restore_from_tray, default=True),
                 pystray.MenuItem("退出", lambda *_args: self.after(0, self._on_close)),
             )
-            self._tray = pystray.Icon("ai_gateway", img, "灵境造片厂", menu)
+            self._tray = pystray.Icon("ai_gateway", img, "灵境 · LingJingAPI", menu)
             self._tray.run()
         except Exception as e:
             print(f"[Tray] 托盘创建失败: {e}")
@@ -9835,7 +10455,7 @@ class GatewayApp(WindowBase):
             return
         confirmed = messagebox.askyesno(
             "确认退出",
-            "确定要退出灵境造片厂吗？\n\n"
+            "确定要退出灵境 · LingJingAPI 吗？\n\n"
             "退出后将关闭：\n"
             "  - ComfyUI\n"
             "  - 本地 API 服务\n"
@@ -10122,8 +10742,8 @@ def main():
         root = tk.Tk()
         root.withdraw()
         messagebox.showinfo(
-            "灵境造片厂已在运行",
-            "已经打开了一个灵境造片厂客户端。\n\n请使用已打开的窗口，避免多个客户端同时同步 URL / Key。",
+            "灵境 · LingJingAPI 已在运行",
+            "已经打开了一个灵境 · LingJingAPI 客户端。\n\n请使用已打开的窗口，避免多个客户端同时同步 URL / Key。",
             parent=root,
         )
         root.destroy()

@@ -696,7 +696,7 @@ try {
         throw "Installer script is missing: $installerScript"
     }
 
-    $installerPath = Join-Path $OutputRoot "LingJingAI-Setup-$Version-win-x64.exe"
+    $installerPath = Join-Path $OutputRoot "LingJingAPI-Setup-$Version-win-x64.exe"
     $installerHashPath = "$installerPath.sha256"
     foreach ($oldOutput in @($installerPath, $installerHashPath)) {
         $oldOutputFull = Get-FullPath $oldOutput
