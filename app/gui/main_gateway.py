@@ -17,7 +17,6 @@ import queue
 import re
 import shutil
 import tempfile
-import unicodedata
 import webbrowser
 import msvcrt
 import uuid
@@ -118,7 +117,6 @@ from app.core.quick_repair import (  # noqa: E402
     save_quick_repair_state,
 )
 from app.core.runtime_state import RuntimeState  # noqa: E402
-from app.core.secret_store import protect_text, unprotect_text  # noqa: E402
 from app.config import Config  # noqa: E402
 from app.core.workflow_dependencies import (  # noqa: E402
     clear_model_index_cache,
@@ -429,7 +427,6 @@ except (TypeError, ValueError):
     COMFY_PORT = 8188
 API_BASE = f"http://127.0.0.1:{API_PORT}"
 COMFY_BASE = _LOCAL_CONFIG.comfyui_url.rstrip("/") or f"http://127.0.0.1:{COMFY_PORT}"
-SERVER_SYNC_MAX_RETRIES = 3
 TORCH_PROBE_TIMEOUT_SECONDS = 90
 _LOOPBACK_SERVER_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _RUNTIME_UPDATE_OPERATION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -519,55 +516,8 @@ def _is_supported_rtx_gpu(gpu_name: str) -> bool:
     )
 
 
-def _platform_server_url_error(value: str) -> str:
-    """Return a user-facing error for unsafe platform endpoints."""
-    text = str(value or "").strip()
-    if not text:
-        return "请填写服务端地址。"
-    if any(ord(char) < 32 for char in text):
-        return "服务端地址包含无效字符。"
-    try:
-        parsed = urlsplit(text)
-        _ = parsed.port
-    except ValueError:
-        return "服务端地址格式无效。"
-    if parsed.username or parsed.password:
-        return "服务端地址不能包含账号或密码。"
-    if parsed.query or parsed.fragment:
-        return "服务端地址不能包含查询参数或片段。"
-    hostname = (parsed.hostname or "").lower()
-    if parsed.scheme == "https" and hostname:
-        return ""
-    if parsed.scheme == "http" and hostname in _LOOPBACK_SERVER_HOSTS:
-        return ""
-    return "正式服务端必须使用 HTTPS；HTTP 仅允许本机开发地址。"
 
 
-def _open_platform_request(request, timeout: float):
-    """Open one platform request without allowing credential-bearing redirects."""
-    import urllib.error as ue
-    import urllib.request as ur
-
-    original = urlsplit(request.full_url)
-    error = _platform_server_url_error(request.full_url)
-    if error:
-        raise ValueError(error)
-
-    def origin(parts):
-        default_port = 443 if parts.scheme == "https" else 80
-        return parts.scheme, (parts.hostname or "").lower(), parts.port or default_port
-
-    original_origin = origin(original)
-
-    class SameOriginRedirectHandler(ur.HTTPRedirectHandler):
-        def redirect_request(self, req, fp, code, msg, headers, newurl):
-            resolved = urljoin(req.full_url, newurl)
-            target = urlsplit(resolved)
-            if _platform_server_url_error(resolved) or origin(target) != original_origin:
-                raise ue.URLError("已阻止服务端跨域或降级重定向")
-            return super().redirect_request(req, fp, code, msg, headers, resolved)
-
-    return ur.build_opener(SameOriginRedirectHandler()).open(request, timeout=timeout)
 
 
 def _acquire_instance_lock() -> bool:
@@ -644,33 +594,10 @@ def _model_download_active(control: dict) -> bool:
     }
 
 
-_ACCOUNT_EMAIL_RE = re.compile(
-    r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@"
-    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
-)
 
 
-def _normalize_account_email(value: str) -> str:
-    """Normalize paste-friendly punctuation without changing a valid address."""
-    normalized = unicodedata.normalize("NFKC", str(value or "")).strip()
-    normalized = normalized.replace("\u200b", "").replace("\ufeff", "")
-    if "@" not in normalized:
-        return normalized
-    local, domain = normalized.rsplit("@", 1)
-    return f"{local}@{domain.lower()}"
 
 
-def _account_email_error(value: str) -> str:
-    email = _normalize_account_email(value)
-    if not email:
-        return "请填写账号邮箱。"
-    if len(email) > 254 or not _ACCOUNT_EMAIL_RE.fullmatch(email):
-        return "邮箱格式不正确，请检查 @ 和英文句点。"
-    local = email.rsplit("@", 1)[0]
-    if len(local) > 64 or local.startswith(".") or local.endswith(".") or ".." in local:
-        return "邮箱格式不正确，请检查英文句点的位置。"
-    return ""
 
 
 def _check_torch(python_path: Path, run_command=subprocess.run) -> dict:
@@ -1054,19 +981,6 @@ class GatewayApp(WindowBase):
         self._workflow_display_fingerprint_value = ""
         self._runtime_start_blocked = False
         self._capture_startup_update_results()
-        self._server_session_token = ""
-        self._server_user_email = ""
-        self._server_url_value = "https://ai.lol-lu.site"
-        self._server_account_profile = {}
-        # Local mode is the product default.  Platform login is optional and
-        # must never block the local API gateway from starting.
-        self._server_mode = "guest"
-        self._server_sync_running = False
-        self._server_sync_fail_count = 0
-        self._heartbeat_run = True
-        self._offline_notice_sent = False
-        self._login_prompt_shown = False
-        self._login_popup = None
         self._runtime_maintenance_popup = None
         self._quick_repair_popup = None
         self._quick_repair_prompt_seen = False
@@ -1075,20 +989,13 @@ class GatewayApp(WindowBase):
             BASE_DIR / "runtime" / "quick_repair.json"
         )
         self._model_import_in_progress = False
-        self._account_status_text = ""
-        self._initial_session_sync_done = False
         self._comfy_starting_until = 0
-        self._client_instance_id = self._load_client_instance_id()
         self._last_completed_outputs = []
         self._last_completed_task_id = ""
         self._last_terminal_task_signature = ""
         self._task_history = []
         self._task_history_ids = set()
         self._workflow_mode = tk.StringVar(value="default")
-        self._load_account_session_state()
-        self._server_url_var = tk.StringVar(value=self._server_url_value or "https://ai.lol-lu.site")
-        self._server_email_var = tk.StringVar(value=self._server_user_email)
-        self._server_password_var = tk.StringVar(value="")
 
         # 系统托盘
         self._tray = None
@@ -1113,8 +1020,6 @@ class GatewayApp(WindowBase):
         self._build_static_pages()
         self._build_footer()
         self._show_page("overview")
-        if self._server_mode == "guest":
-            self._set_light("server", "online", "本地模式")
 
         self.center()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1123,7 +1028,6 @@ class GatewayApp(WindowBase):
         # 异步启动序列
         if not self._runtime_start_blocked:
             self._request_backend_start("启动后台")
-        threading.Thread(target=self._heartbeat_loop, daemon=True).start()
         self.after_idle(self._write_runtime_restart_ack)
         self.after(600, self._show_comfyui_recovery_result)
         self.after(800, self._show_runtime_update_result)
@@ -1139,151 +1043,17 @@ class GatewayApp(WindowBase):
             f"+{(sw-LAYOUT['window_w'])//2}+{(sh-LAYOUT['window_h'])//2}"
         )
 
-    def _account_session_path(self) -> Path:
-        return BASE_DIR / "runtime" / "account_session.json"
 
-    def _client_instance_path(self) -> Path:
-        return BASE_DIR / "runtime" / "client_instance.json"
 
-    def _load_client_instance_id(self) -> str:
-        path = self._client_instance_path()
-        try:
-            if path.exists():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                value = str(data.get("instance_id") or "").strip()
-                if value:
-                    return value
-        except Exception:
-            pass
-        value = f"desktop-{uuid.uuid4().hex}"
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"instance_id": value}, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-        return value
 
-    def _load_account_session_state(self):
-        path = self._account_session_path()
-        try:
-            if not path.exists():
-                return
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                return
-            mode = str(data.get("mode") or "unset").strip()
-            if mode not in ("logged_in", "guest"):
-                return
-            self._server_mode = mode
-            self._server_url_value = str(data.get("server_url") or self._server_url_value).strip() or self._server_url_value
-            self._server_user_email = str(data.get("email") or "").strip()
-            protected_token = str(data.get("session_token_protected") or "").strip()
-            legacy_token = str(data.get("session_token") or "").strip()
-            self._server_session_token = (
-                unprotect_text(protected_token or legacy_token)
-                if mode == "logged_in"
-                else ""
-            )
-            if _platform_server_url_error(self._server_url_value):
-                self._server_mode = "guest"
-                self._server_session_token = ""
-            profile = data.get("profile")
-            self._server_account_profile = profile if isinstance(profile, dict) else {}
-            if "session_token" in data:
-                # Migrate legacy plaintext immediately.  Waiting for a later
-                # successful server sync can leave the token exposed forever
-                # on an offline machine.
-                self._save_account_session()
-        except Exception as ex:
-            print(f"[Account] load session failed: {ex}")
 
-    def _entry_text(self, entry_name: str, fallback: str = "") -> str:
-        entry = getattr(self, entry_name, None)
-        try:
-            if entry is not None and entry.winfo_exists():
-                return entry.get()
-        except Exception:
-            pass
-        return fallback
 
-    def _get_server_url(self) -> str:
-        fallback = self._server_url_var.get() if hasattr(self, "_server_url_var") else self._server_url_value
-        return (self._entry_text("_server_url_entry", fallback) or "https://ai.lol-lu.site").strip().rstrip("/")
 
-    def _get_server_email(self) -> str:
-        fallback = self._server_email_var.get() if hasattr(self, "_server_email_var") else self._server_user_email
-        return _normalize_account_email(self._entry_text("_server_email_entry", fallback))
 
-    def _get_server_password(self) -> str:
-        fallback = self._server_password_var.get() if hasattr(self, "_server_password_var") else ""
-        return self._entry_text("_server_password_entry", fallback)
 
-    def _set_account_form_values(self, server_url=None, email=None, password=None):
-        if server_url is not None:
-            self._server_url_value = str(server_url).strip().rstrip("/") or self._server_url_value
-        if email is not None:
-            email = _normalize_account_email(email)
-        if email is not None and self._server_mode != "logged_in":
-            self._server_user_email = email
-        values = {
-            "_server_url_entry": (server_url, "_server_url_var"),
-            "_server_email_entry": (email, "_server_email_var"),
-            "_server_password_entry": (password, "_server_password_var"),
-        }
-        for entry_name, (value, var_name) in values.items():
-            if value is None:
-                continue
-            value = str(value)
-            var = getattr(self, var_name, None)
-            if var is not None:
-                var.set(value)
-            entry = getattr(self, entry_name, None)
-            try:
-                if entry is not None and entry.winfo_exists():
-                    entry.delete(0, tk.END)
-                    entry.insert(0, value)
-            except Exception:
-                pass
 
-    def _save_account_session(self):
-        path = self._account_session_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "mode": self._server_mode,
-                "server_url": self._server_url_value,
-                "email": self._server_user_email,
-                "session_token_protected": (
-                    protect_text(self._server_session_token)
-                    if self._server_mode == "logged_in" and self._server_session_token
-                    else ""
-                ),
-                "profile": self._server_account_profile if isinstance(self._server_account_profile, dict) else {},
-                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            }
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as ex:
-            print(f"[Account] save session failed: {ex}")
 
-    def _clear_account_session(self):
-        self._server_session_token = ""
-        self._server_user_email = ""
-        self._server_account_profile = {}
-        self._server_mode = "unset"
-        if hasattr(self, "_server_email_var"):
-            self._server_email_var.set("")
-        try:
-            path = self._account_session_path()
-            if path.exists():
-                path.unlink()
-        except Exception:
-            pass
 
-    def _maybe_show_login_prompt(self):
-        """Platform login is opt-in; startup always continues in local mode."""
-        return
 
     def _setup_style(self):
         if CTK_AVAILABLE:
@@ -2370,7 +2140,7 @@ class GatewayApp(WindowBase):
         dialog["skip_check"].configure(state="normal")
 
     # ══════════════════════════════════════════════════════
-    # 顶栏：品牌 + 账号信息
+    # 顶栏：页面标题
     # ══════════════════════════════════════════════════════
     def _build_title_bar(self):
         bar = self._card(self._content_root)
@@ -2400,36 +2170,6 @@ class GatewayApp(WindowBase):
         )
         self._page_subtitle_label.pack(side="left", padx=(12, 0), pady=(4, 0))
 
-        tk.Frame(bar, bg=C["surface"]).pack(side="left", fill="x", expand=True)
-
-        right = tk.Frame(bar, bg=C["surface"])
-        right.pack(side="right", padx=16, pady=18)
-
-        self._account_badge = tk.Frame(right, bg=C["surface"], cursor="hand2")
-        self._account_badge.pack(side="left", padx=(0, 12))
-        self._account_avatar_label = tk.Canvas(
-            self._account_badge,
-            bg=C["primary"],
-            width=34,
-            height=34,
-            highlightthickness=0,
-            bd=0,
-            cursor="hand2",
-        )
-        self._account_avatar_label.pack(side="left", padx=(0, 8))
-        self._account_summary_label = tk.Label(
-            self._account_badge,
-            text="未登录 · 普通用户 · 积分 0",
-            font=F["small"],
-            fg=C["text"],
-            bg=C["surface"],
-            cursor="hand2",
-        )
-        self._account_summary_label.pack(side="left")
-        for widget in (self._account_badge, self._account_avatar_label, self._account_summary_label):
-            widget.bind("<Button-1>", lambda _event: self._show_account_popup())
-        self._render_account_badge()
-
     # ══════════════════════════════════════════════════════
     # 底部状态灯条
     # ══════════════════════════════════════════════════════
@@ -2439,7 +2179,6 @@ class GatewayApp(WindowBase):
         bar.pack_propagate(False)
 
         lights = [
-            ("server",  "服务器"),
             ("env",     "运行环境"),
             ("comfyui", "ComfyUI"),
             ("tunnel",  "公网连接"),
@@ -2603,295 +2342,14 @@ class GatewayApp(WindowBase):
         key_copy_box.pack_propagate(False)
         self._button(key_copy_box, "复制", self._copy_api_key, "plain", width=66).pack(fill="both", expand=True)
 
-    def _account_summary_text(self) -> str:
-        if self._server_mode == "guest":
-            return "本地模式"
-        email = self._server_user_email or "未登录"
-        profile = self._server_account_profile if isinstance(self._server_account_profile, dict) else {}
-        user = profile.get("user") if isinstance(profile.get("user"), dict) else profile
-        account = profile.get("account") if isinstance(profile.get("account"), dict) else {}
-        vip_level = (
-            account.get("vipLevel")
-            or account.get("vip_level")
-            or account.get("vip")
-            or user.get("vipLevel")
-            or user.get("vip_level")
-            or user.get("vip")
-        )
-        membership_value = (
-            account.get("membership")
-            or account.get("membershipStatus")
-            or account.get("memberLevel")
-            or account.get("member_level")
-            or user.get("membership")
-            or user.get("membershipStatus")
-            or user.get("memberLevel")
-            or user.get("member_level")
-            or "普通用户"
-        )
-        if isinstance(membership_value, dict):
-            membership = str(
-                membership_value.get("name")
-                or membership_value.get("label")
-                or membership_value.get("level")
-                or membership_value.get("status")
-                or "普通用户"
-            )
-        else:
-            membership = str(membership_value)
-        if isinstance(vip_level, bool):
-            vip_text = "VIP" if vip_level else membership
-        elif vip_level not in (None, ""):
-            vip_text = f"VIP {vip_level}"
-        else:
-            vip_text = membership
-        points = (
-            account.get("points")
-            if account.get("points") not in (None, "")
-            else account.get("score", account.get("credits", account.get("remainingCredits", account.get("creditsRemaining", None))))
-        )
-        if points in (None, ""):
-            points = user.get("points", user.get("score", user.get("credits", user.get("remainingCredits", 0))))
-        return f"{email} · {vip_text} · 积分 {points}"
 
-    def _draw_account_avatar(self, text: str, color: str):
-        if not hasattr(self, "_account_avatar_label"):
-            return
-        canvas = self._account_avatar_label
-        canvas.configure(bg=C["surface"])
-        canvas.delete("all")
-        RoundedFrame._round_rect(canvas, 1, 1, 33, 33, 8, fill=color, outline=color, width=1)
-        canvas.create_text(
-            17,
-            17,
-            text=(text or "登")[:1].upper(),
-            fill="#ffffff",
-            font=("Microsoft YaHei UI", 10, "bold"),
-        )
 
-    def _render_account_badge(self):
-        if not hasattr(self, "_account_summary_label"):
-            return
-        if self._server_mode == "logged_in":
-            avatar = (self._server_user_email[:1] or "账").upper()
-            self._draw_account_avatar(avatar, C["primary"])
-            self._account_summary_label.config(text=self._account_summary_text(), fg=C["text"])
-        elif self._server_mode == "guest":
-            self._draw_account_avatar("本", C["success"])
-            self._account_summary_label.config(text="本地模式", fg=C["text"])
-        else:
-            self._draw_account_avatar("登", C["text2"])
-            self._account_summary_label.config(text="未登录", fg=C["text2"])
 
-    def _show_account_popup(self):
-        """Show account details when logged in; otherwise offer optional login."""
-        if self._server_mode != "logged_in" or not self._server_session_token:
-            self._show_login_prompt(force=True)
-            return
 
-        existing = getattr(self, "_account_popup", None)
-        try:
-            if existing is not None and existing.winfo_exists():
-                existing.lift()
-                existing.focus_force()
-                return
-        except Exception:
-            pass
 
-        popup = tk.Toplevel(self)
-        self._account_popup = popup
-        popup.title("账号信息")
-        popup.configure(bg=C["bg"])
-        popup.transient(self)
-        popup.resizable(False, False)
-        self._center_popup(popup, 480, 380)
 
-        def close_popup():
-            self._account_popup = None
-            try:
-                popup.destroy()
-            except Exception:
-                pass
 
-        popup.protocol("WM_DELETE_WINDOW", close_popup)
-        panel = self._card(popup, fill="both", expand=True, padx=18, pady=18)
 
-        head = tk.Frame(panel, bg=C["card"])
-        head.pack(fill="x", padx=24, pady=(22, 14))
-        avatar = tk.Canvas(head, width=48, height=48, bg=C["card"], highlightthickness=0)
-        avatar.pack(side="left", padx=(0, 12))
-        RoundedFrame._round_rect(avatar, 1, 1, 47, 47, 12, fill=C["primary"], outline=C["primary"])
-        avatar.create_text(24, 24, text=(self._server_user_email[:1] or "账").upper(), fill="#fff", font=("Microsoft YaHei UI", 14, "bold"))
-        identity = tk.Frame(head, bg=C["card"])
-        identity.pack(side="left", fill="x", expand=True)
-        tk.Label(identity, text=self._server_user_email or "平台账号", font=F["title"], fg=C["text"], bg=C["card"]).pack(anchor="w")
-        account_summary = self._account_summary_text()
-        email_prefix = f"{self._server_user_email} · "
-        if account_summary.startswith(email_prefix):
-            account_summary = account_summary[len(email_prefix):]
-        tk.Label(identity, text=account_summary, font=F["small"], fg=C["text2"], bg=C["card"]).pack(anchor="w", pady=(4, 0))
-        self._badge_for_account_popup = tk.Label(head, text="  已同步  ", font=F["small"], fg=C["success"], bg=C["soft_success"], padx=4, pady=3)
-        self._badge_for_account_popup.pack(side="right")
-
-        info = tk.Frame(panel, bg=C["hover"], highlightthickness=1, highlightbackground=C["border2"])
-        info.pack(fill="x", padx=24, pady=(0, 16))
-        rows = [
-            ("平台同步", "已开启"),
-            ("本地服务", "退出登录后仍可正常使用"),
-            ("公网连接", "由客户端自动建立"),
-        ]
-        for label, value in rows:
-            row = tk.Frame(info, bg=C["hover"])
-            row.pack(fill="x", padx=12, pady=6)
-            tk.Label(row, text=label, font=F["small"], fg=C["muted"], bg=C["hover"]).pack(side="left")
-            tk.Label(row, text=value, font=F["small"], fg=C["text"], bg=C["hover"]).pack(side="right")
-
-        tk.Label(
-            panel,
-            text=(
-                "退出登录只会停止平台同步，不会自动更换已共享的访问密钥。"
-                "如果不再信任该平台，请退出后到设置中重新生成访问密钥。"
-            ),
-            font=F["small"],
-            fg=C["warn"],
-            bg=C["card"],
-            justify="left",
-            wraplength=400,
-        ).pack(fill="x", padx=24, pady=(0, 14))
-
-        actions = tk.Frame(panel, bg=C["card"])
-        actions.pack(fill="x", padx=24, pady=(0, 18))
-        self._button(actions, "退出登录", lambda: self._logout_account(close_popup), "plain").pack(fill="x", expand=True)
-
-    def _logout_account(self, close_callback=None):
-        server_url = self._server_url_value
-        token = self._server_session_token
-        self._server_session_token = ""
-        self._server_user_email = ""
-        self._server_account_profile = {}
-        self._server_mode = "guest"
-        self._initial_session_sync_done = False
-        self._server_password_var.set("")
-        self._save_account_session()
-        self._render_account_badge()
-        self._set_account_status("本地模式：不会连接平台服务端", "success")
-        self._set_light("server", "online", "本地模式")
-        if hasattr(self, "_footer_label"):
-            self._footer_label.config(text="  已退出平台；如需撤销旧调用权限，请重新生成访问密钥")
-        if callable(close_callback):
-            close_callback()
-        if token:
-            threading.Thread(
-                target=self._notify_server_offline,
-                kwargs={"server_url": server_url, "token": token},
-                daemon=True,
-            ).start()
-
-    def _apply_account_visibility(self):
-        if not hasattr(self, "_account_frame"):
-            return
-        if self._server_mode in ("logged_in", "guest"):
-            if self._account_frame.winfo_ismapped():
-                self._account_frame.pack_forget()
-        else:
-            if not self._account_frame.winfo_ismapped():
-                self._account_frame.pack(fill="x", padx=16, pady=(4, 8), before=self._wf_frame)
-
-    def _hide_account_panel(self):
-        if self._account_frame.winfo_ismapped():
-            self._account_frame.pack_forget()
-
-    def _toggle_account_panel(self):
-        if self._account_frame.winfo_ismapped():
-            self._account_frame.pack_forget()
-        else:
-            self._account_frame.pack(fill="x", padx=16, pady=(4, 8), before=self._wf_frame)
-
-    def _build_account_panel(self):
-        self._account_frame = tk.Frame(self, bg=C["card"])
-        self._account_frame.pack(fill="x", padx=16, pady=(4, 8))
-
-        header = tk.Frame(self._account_frame, bg=C["card"])
-        header.pack(fill="x", padx=12, pady=(8, 4))
-        tk.Label(header, text="服务端连接", font=F["bold"], fg=C["text"], bg=C["card"]).pack(side="left")
-        self._account_status_label = tk.Label(
-            header,
-            text="游客模式：可复制 URL / Key 给第三方调用",
-            font=F["small"],
-            fg=C["warn"],
-            bg=C["card"],
-            anchor="e",
-        )
-        self._account_status_label.pack(side="right")
-
-        row = tk.Frame(self._account_frame, bg=C["card"])
-        row.pack(fill="x", padx=12, pady=(0, 10))
-
-        def field(parent, label, width=22, show=None):
-            box = tk.Frame(parent, bg=C["card"])
-            box.pack(side="left", fill="x", expand=True, padx=(0, 8))
-            tk.Label(box, text=label, font=F["small"], fg=C["text2"], bg=C["card"]).pack(anchor="w")
-            entry = self._entry_widget(box, show=show, width=width * 8 if CTK_AVAILABLE else width)
-            entry.pack(fill="x", ipady=4 if not CTK_AVAILABLE else 0)
-            return entry
-
-        self._server_url_entry = field(row, "服务端地址", 26)
-        self._server_url_entry.insert(0, self._server_url_value or "https://ai.lol-lu.site")
-        self._server_email_entry = field(row, "账号邮箱", 20)
-        if self._server_user_email:
-            self._server_email_entry.insert(0, self._server_user_email)
-        self._server_password_entry = field(row, "密码", 18, show="*")
-
-        btn_box = tk.Frame(row, bg=C["card"])
-        btn_box.pack(side="left", padx=(0, 0), pady=(16, 0))
-        tk.Button(
-            btn_box,
-            text="登录并同步",
-            font=F["small"],
-            bg=C["primary"],
-            fg="#fff",
-            activebackground=C["accent"],
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=self._login_and_sync,
-        ).pack(side="left", ipadx=8, ipady=4, padx=(0, 6))
-        tk.Button(
-            btn_box,
-            text="游客模式",
-            font=F["small"],
-            bg=C["surface"],
-            fg=C["text"],
-            activebackground=C["hover"],
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=self._use_guest_mode,
-        ).pack(side="left", ipadx=8, ipady=4)
-        tk.Button(
-            btn_box,
-            text="注册",
-            font=F["small"],
-            bg=C["surface"],
-            fg=C["primary"],
-            activebackground=C["hover"],
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=self._open_register,
-        ).pack(side="left", ipadx=8, ipady=4, padx=(6, 0))
-        tk.Button(
-            btn_box,
-            text="收起",
-            font=F["small"],
-            bg=C["surface"],
-            fg=C["text2"],
-            activebackground=C["hover"],
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            command=self._hide_account_panel,
-        ).pack(side="left", ipadx=8, ipady=4, padx=(6, 0))
 
     def _build_main_area(self):
         self._main_area = tk.Frame(self._overview_page, bg=C["bg"])
@@ -5617,7 +5075,7 @@ class GatewayApp(WindowBase):
             if cleanup_root is not None:
                 shutil.rmtree(cleanup_root, ignore_errors=True)
 
-    def _reload_workflows_and_sync(self):
+    def _reload_workflows(self):
         import urllib.request as ur
         if self._shutting_down:
             return
@@ -5658,16 +5116,6 @@ class GatewayApp(WindowBase):
                 self._post_to_ui(lambda d=data: self._on_health_update(d))
         except Exception as health_error:
             print(f"[Workflow] health refresh failed: {health_error}")
-
-        if self._shutting_down:
-            return
-        if self._server_session_token:
-            try:
-                self._sync_to_server_with_retry(max_retries=SERVER_SYNC_MAX_RETRIES)
-                self._post_to_ui(lambda: self._set_light("server", "online", "已同步"))
-            except Exception as sync_error:
-                print(f"[Workflow] sync after import failed: {sync_error}")
-                self._post_to_ui(lambda: self._set_light("server", "offline", "同步失败"))
 
     def _show_workflow_import_result(self, result: dict):
         adaptation = result.get("adaptation") or {}
@@ -5806,7 +5254,7 @@ class GatewayApp(WindowBase):
                 data = json.loads(raw)
                 registry.save_mapping(wf.id, data.get("fields"), data.get("output_type"), expected_hash)
                 self._publish_local_workflows(self._workflow_records_from_registry(registry), str(registry.default_workflow_id or ""))
-                threading.Thread(target=self._reload_workflows_and_sync, daemon=True).start()
+                threading.Thread(target=self._reload_workflows, daemon=True).start()
                 popup.destroy()
             except Exception as exc:
                 status.config(text=f"保存失败：{exc}")
@@ -5868,7 +5316,7 @@ class GatewayApp(WindowBase):
             result.get("workflows") or [],
             str(result.get("default_workflow_id") or ""),
         )
-        threading.Thread(target=self._reload_workflows_and_sync, daemon=True).start()
+        threading.Thread(target=self._reload_workflows, daemon=True).start()
         self._footer_label.config(text=f"  工作流已导入：{result.get('name')}")
         self._post_to_ui(lambda data=dict(result): self._show_workflow_import_result(data), delay=50)
 
@@ -6002,7 +5450,7 @@ class GatewayApp(WindowBase):
                     def finish():
                         self._publish_local_workflows(workflows, default_id)
                         self._footer_label.config(text=f"  {success_text}")
-                        threading.Thread(target=self._reload_workflows_and_sync, daemon=True).start()
+                        threading.Thread(target=self._reload_workflows, daemon=True).start()
                     try:
                         self._run_ui_backend_step(finish)
                     except Exception as error:
@@ -7446,7 +6894,6 @@ class GatewayApp(WindowBase):
             return
         self._shutting_down = True
         self._anim_running = False
-        self._heartbeat_run = False
         self._poll_run = False
         _release_instance_lock()
         self._complete_destroy()
@@ -7633,7 +7080,6 @@ class GatewayApp(WindowBase):
         """Close this process so the external helper can replace mapped DLLs."""
         self._shutting_down = True
         self._anim_running = False
-        self._heartbeat_run = False
         self._poll_run = False
         self._complete_destroy(popup)
 
@@ -7771,7 +7217,6 @@ class GatewayApp(WindowBase):
     def _clear_public_url(self):
         self._tunnel_url = ""
         self._set_public_url("")
-        self._initial_session_sync_done = False
 
     def _set_api_key(self, api_key: str):
         self._key_label.config(text=self._short_middle(api_key, 18, 10) if api_key else "—")
@@ -7917,25 +7362,6 @@ class GatewayApp(WindowBase):
         save_button = self._button(actions, "保存并应用", save, "primary", width=104)
         save_button.pack(side="right")
 
-    def _json_headers(self, server_url: str = "", token: str = "") -> dict:
-        server_url = (server_url or "").rstrip("/")
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Cache-Control": "no-cache",
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                f"Chrome/126.0.0.0 Safari/537.36 LingJingClient/{APP_VERSION}"
-            ),
-        }
-        if server_url.startswith(("http://", "https://")):
-            headers["Origin"] = server_url
-            headers["Referer"] = f"{server_url}/"
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        return headers
 
     def _current_local_api_key(self) -> str:
         """Read the key used by the running local API, with memory as fallback."""
@@ -7969,402 +7395,14 @@ class GatewayApp(WindowBase):
         headers["Authorization"] = f"Bearer {admin_key}"
         return headers
 
-    def _set_account_status(self, text: str, status: str = "warn"):
-        color = C["success"] if status == "success" else C["error"] if status == "error" else C["warn"]
-        self._account_status_text = text
-        if hasattr(self, "_account_status_label"):
-            self._account_status_label.config(text=text, fg=color)
-        self._render_account_badge()
 
-    def _fetch_account_profile(self, server_url: str, token: str) -> dict:
-        if not server_url or not token:
-            return {}
-        import urllib.request as ur
-        req = ur.Request(
-            f"{server_url.rstrip('/')}/api/auth/me",
-            method="GET",
-            headers=self._json_headers(server_url, token),
-        )
-        with _open_platform_request(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return data if isinstance(data, dict) else {}
 
-    def _format_http_error(self, error: Exception) -> str:
-        try:
-            import urllib.error as ue
-            if isinstance(error, ue.HTTPError):
-                raw = error.read().decode("utf-8", errors="ignore")
-                lowered = raw.lower()
-                if "user-agent has been banned" in lowered or "cloudflare" in lowered:
-                    return "Cloudflare 拦截了桌面客户端请求，请在服务端安全规则放行客户端登录接口"
-                try:
-                    data = json.loads(raw)
-                    err = data.get("error") if isinstance(data, dict) else None
-                    if isinstance(err, dict):
-                        code = str(err.get("code") or "").strip()
-                        msg = str(err.get("message") or "").strip()
-                        auth_errors = {
-                            "USER_NOT_FOUND",
-                            "INVALID_CREDENTIALS",
-                            "INVALID_PASSWORD",
-                            "WRONG_PASSWORD",
-                            "AUTH_FAILED",
-                            "LOGIN_FAILED",
-                        }
-                        auth_text = f"{code} {msg}".casefold()
-                        if (
-                            code.upper() in auth_errors
-                            or "not registered" in auth_text
-                            or "not found" in auth_text
-                            or "未注册" in auth_text
-                            or "密码错误" in auth_text
-                        ):
-                            return "用户名或密码错误"
-                        return f"{code}: {msg}" if code and msg else msg or code or f"HTTP {error.code}"
-                    if isinstance(data, dict) and data.get("message"):
-                        return str(data.get("message"))
-                except Exception:
-                    pass
-                raw = raw.strip()
-                if raw.startswith("<"):
-                    return f"HTTP {error.code} {error.reason}"
-                return raw[:240] or f"HTTP {error.code} {error.reason}"
-        except Exception:
-            pass
-        return str(error)
 
-    def _use_guest_mode(self):
-        self._server_session_token = ""
-        self._server_user_email = ""
-        self._server_mode = "guest"
-        self._server_account_profile = {}
-        self._server_password_var.set("")
-        self._save_account_session()
-        self._render_account_badge()
-        self._apply_account_visibility()
-        self._set_account_status("本地模式：不会连接平台服务端", "success")
-        self._set_light("server", "online", "本地模式")
 
-    def _show_login_prompt(self, force: bool = False):
-        if self._shutting_down:
-            return
-        try:
-            if self._login_popup is not None and self._login_popup.winfo_exists():
-                self._login_popup.lift()
-                self._login_popup.focus_force()
-                return
-        except Exception:
-            self._login_popup = None
-        if self._login_prompt_shown and not force:
-            return
-        self._login_prompt_shown = True
 
-        popup = tk.Toplevel(self)
-        self._login_popup = popup
-        popup.title("登录平台账号")
-        popup.geometry("600x470")
-        popup.configure(bg=C["bg"])
-        popup.transient(self)
-        popup.grab_set()
-        popup.resizable(True, True)
-        popup.minsize(580, 450)
-        self._center_popup(popup, 600, 470)
 
-        def close_popup():
-            self._login_popup = None
-            try:
-                popup.grab_release()
-            except Exception:
-                pass
-            popup.destroy()
 
-        popup.protocol("WM_DELETE_WINDOW", close_popup)
 
-        panel = self._card(popup, fill="both", expand=True, padx=18, pady=18)
-
-        title_row = tk.Frame(panel, bg=C["card"])
-        title_row.pack(fill="x", padx=28, pady=(22, 8))
-        tk.Label(title_row, text="▷", font=("Microsoft YaHei UI", 18, "bold"),
-                 fg="#ffffff", bg=C["primary"], width=3).pack(side="left", padx=(0, 10), ipady=4)
-        tk.Label(title_row, text="登录灵境 · LingJingAPI 账号", font=F["title"],
-                 fg=C["text"], bg=C["card"]).pack(side="left")
-        tk.Label(
-            panel,
-            text=(
-                "登录后会向你填写的服务端同步公网 URL、本机 API Key、设备名称及工作流/模型状态，"
-                "供平台调用；不会同步生成提示词。不登录也能使用完整的本地功能。"
-            ),
-            font=F["small"],
-            fg=C["text2"],
-            bg=C["card"],
-            justify="left",
-            wraplength=500,
-        ).pack(anchor="w", padx=28, pady=(0, 18))
-
-        form = tk.Frame(panel, bg=C["card"])
-        form.pack(fill="x", padx=28)
-
-        def popup_field(label, text="", show=None):
-            row = tk.Frame(form, bg=C["card"])
-            row.pack(fill="x", pady=(0, 10))
-            tk.Label(row, text=label, font=F["normal"], fg=C["text"], bg=C["card"], width=10, anchor="w").pack(side="left")
-            entry = self._entry_widget(
-                row,
-                show=show,
-                width=320,
-                font=("Microsoft YaHei UI", 11),
-                height=40,
-            )
-            entry.pack(side="left", fill="x", expand=True, ipady=7 if not CTK_AVAILABLE else 0)
-            if text:
-                entry.insert(0, text)
-            return entry
-
-        server_entry = popup_field("服务端地址", self._get_server_url() or "https://ai.lol-lu.site")
-        email_entry = popup_field("账号邮箱", self._get_server_email())
-        password_entry = popup_field("密码", self._get_server_password(), show="*")
-        status_lbl = tk.Label(panel, text="", font=F["normal"], fg=C["error"], bg=C["card"], anchor="w")
-        status_lbl.pack(fill="x", padx=28)
-
-        actions = tk.Frame(panel, bg=C["card"])
-        actions.pack(fill="x", padx=28, pady=(14, 0))
-
-        def guest():
-            self._set_account_form_values(
-                server_url=server_entry.get().strip(),
-                email=email_entry.get().strip(),
-                password="",
-            )
-            self._use_guest_mode()
-            close_popup()
-
-        def login():
-            normalized_email = _normalize_account_email(email_entry.get())
-            self._set_account_form_values(
-                server_url=server_entry.get().strip(),
-                email=normalized_email,
-                password=password_entry.get(),
-            )
-            def on_result(success: bool, message: str):
-                try:
-                    if not popup.winfo_exists():
-                        return
-                    status_lbl.config(text=message, fg=C["success"] if success else C["error"])
-                    login_button.configure(state="normal", text="登录并同步")
-                    if success:
-                        popup.after(500, close_popup)
-                    else:
-                        password_entry.focus_set()
-                except Exception:
-                    pass
-
-            status_lbl.config(text="正在验证账号...", fg=C["warn"])
-            login_button.configure(state="disabled", text="正在登录...")
-            self._login_and_sync(on_result=on_result)
-
-        login_button = self._button(actions, "登录并同步", login, "primary")
-        login_button.pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 8))
-        self._button(actions, "暂不登录，使用本地功能", guest, "plain").pack(side="left", fill="x", expand=True, ipady=7, padx=(8, 0))
-
-        links = tk.Frame(panel, bg=C["card"])
-        links.pack(fill="x", padx=28, pady=(16, 0))
-        tk.Button(links, text="注册账号", font=F["small"], bg=C["card"], fg=C["primary"],
-                  activebackground=C["card"], relief="flat", bd=0, cursor="hand2",
-                  command=self._open_register).pack(side="left")
-
-    def _login_and_sync(self, on_result=None):
-        if self._server_sync_running:
-            if callable(on_result):
-                on_result(False, "已有登录请求正在处理中，请稍候。")
-            return
-        server_url = self._get_server_url()
-        email = _normalize_account_email(self._get_server_email())
-        password = self._get_server_password()
-        if not server_url:
-            self._set_account_status("请填写服务端地址", "error")
-            if callable(on_result):
-                on_result(False, "请填写服务端地址。")
-            return
-        url_error = _platform_server_url_error(server_url)
-        if url_error:
-            self._set_account_status(url_error.rstrip("。"), "error")
-            if callable(on_result):
-                on_result(False, url_error)
-            return
-        if not email or not password:
-            self._set_account_status("请填写账号邮箱和密码", "error")
-            if callable(on_result):
-                on_result(False, "请填写账号邮箱和密码。")
-            return
-        email_error = _account_email_error(email)
-        if email_error:
-            self._set_account_status(email_error.rstrip("。"), "error")
-            if callable(on_result):
-                on_result(False, email_error)
-            return
-        self._set_account_form_values(email=email)
-        threading.Thread(
-            target=self._login_and_sync_worker,
-            args=(server_url, email, password, on_result),
-            daemon=True,
-        ).start()
-
-    def _login_and_sync_worker(self, server_url: str, email: str, password: str, on_result=None):
-        email = _normalize_account_email(email)
-        self._server_sync_running = True
-        self.after(0, lambda: self._set_account_status("正在登录服务端...", "warn"))
-        try:
-            import urllib.request as ur
-
-            login_payload = json.dumps({"email": email, "password": password}).encode("utf-8")
-            req = ur.Request(
-                f"{server_url}/api/auth/login",
-                data=login_payload,
-                method="POST",
-                headers=self._json_headers(server_url),
-            )
-            with _open_platform_request(req, timeout=20) as resp:
-                login_data = json.loads(resp.read().decode("utf-8"))
-            token = login_data.get("sessionToken", "")
-            if not token:
-                raise RuntimeError("服务端未返回 sessionToken")
-            self._server_session_token = token
-            self._offline_notice_sent = False
-            self._server_user_email = email
-            self._server_url_value = server_url
-            self._server_mode = "logged_in"
-            self._server_account_profile = {"user": login_data.get("user", {})}
-            try:
-                profile = self._fetch_account_profile(server_url, token)
-                if profile:
-                    self._server_account_profile = profile
-            except Exception as profile_error:
-                print(f"[Account] profile refresh failed: {profile_error}")
-            self._save_account_session()
-            self.after(0, lambda: self._set_account_form_values(server_url=server_url, email=email, password=""))
-            self.after(0, self._render_account_badge)
-            self.after(0, self._apply_account_visibility)
-            self.after(0, lambda: self._set_account_status("登录成功，正在同步客户端...", "warn"))
-            if callable(on_result):
-                self.after(0, lambda: on_result(True, "登录成功，正在同步客户端信息..."))
-            try:
-                self._sync_to_server_with_retry(server_url, max_retries=SERVER_SYNC_MAX_RETRIES, takeover=True)
-                self._save_account_session()
-                self.after(0, lambda: self._set_account_status(f"已同步：{email}", "success"))
-                self.after(0, lambda: self._set_light("server", "online", "已同步"))
-            except Exception as sync_error:
-                friendly = self._format_http_error(sync_error)
-                self.after(0, lambda e=friendly: self._set_account_status(f"已登录，同步失败：{e}", "error"))
-                self.after(0, lambda: self._set_light("server", "offline", "同步失败"))
-        except Exception as ex:
-            self._server_session_token = ""
-            self._server_mode = "guest"
-            self.after(0, lambda: self._set_account_form_values(password=""))
-            friendly = self._format_http_error(ex)
-            self.after(0, lambda e=friendly: self._set_account_status(f"同步失败：{e}", "error"))
-            if callable(on_result):
-                self.after(0, lambda e=friendly: on_result(False, f"登录失败：{e}"))
-            self.after(0, lambda: self._set_light("server", "online", "本地模式"))
-            self.after(0, self._render_account_badge)
-            self.after(0, self._apply_account_visibility)
-        finally:
-            self._server_sync_running = False
-
-    def _sync_payload(self, status: str = "", takeover: bool = False) -> dict:
-        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        workflows = self._last_health.get("workflows") or []
-        if isinstance(workflows, int):
-            workflows = []
-        if not workflows:
-            try:
-                workflows = read_local_workflow_catalog(
-                    _workflows_dir(),
-                    BASE_DIR / "runtime" / "workflow_config.json",
-                )
-            except (OSError, ValueError):
-                workflows = []
-        models = []
-        model_groups = {"image": [], "video": [], "text": []}
-        for wf in workflows:
-            if not isinstance(wf, dict):
-                continue
-            model = {
-                "id": wf.get("id", ""),
-                "name": wf.get("name", wf.get("id", "")),
-                "label": wf.get("name", wf.get("id", "")),
-                "type": wf.get("type", ""),
-                "capability": wf.get("capability", ""),
-                "output_type": wf.get("output_type", ""),
-                "model_group": wf.get("model_group", ""),
-                "available": wf.get("enabled", True) and self._workflow_model_available(wf),
-                "workflowId": wf.get("id", ""),
-                "input_schema": wf.get("input_schema") or {},
-                "inputs": wf.get("inputs") or [],
-            }
-            models.append({
-                **model,
-            })
-            group = self._workflow_group_for_display(model)
-            model_groups.setdefault(group, []).append(model)
-        raw_current_task = self._last_health.get("current_task")
-        safe_current_task = None
-        if isinstance(raw_current_task, dict):
-            safe_fields = (
-                "id",
-                "task_id",
-                "workflow_id",
-                "workflow_name",
-                "phase",
-                "progress_label",
-                "progress_percent",
-                "status",
-                "progress",
-                "progress_max",
-                "started_at",
-                "elapsed",
-                "elapsed_seconds",
-            )
-            safe_current_task = {
-                key: raw_current_task[key]
-                for key in safe_fields
-                if key in raw_current_task
-            }
-
-        return {
-            "baseUrl": self._tunnel_url,
-            "apiKey": self._api_key,
-            "base_url": self._tunnel_url,
-            "api_key": self._api_key,
-            "clientId": self._last_health.get("session_id", "") or f"local-{os.environ.get('COMPUTERNAME', 'windows')}",
-            "instanceId": self._client_instance_id,
-            "clientName": os.environ.get("COMPUTERNAME", "Windows 客户端"),
-            "localApi": API_BASE,
-            "client_id": self._last_health.get("session_id", "") or f"local-{os.environ.get('COMPUTERNAME', 'windows')}",
-            "instance_id": self._client_instance_id,
-            "client_name": os.environ.get("COMPUTERNAME", "Windows 客户端"),
-            "version": self._last_health.get("version", APP_VERSION),
-            "local_api": API_BASE,
-            "status": status or ("online" if self._tunnel_url else "starting"),
-            "heartbeatAt": now_iso,
-            "heartbeat_at": now_iso,
-            "lastSeenAt": now_iso,
-            "last_seen_at": now_iso,
-            "workflows": workflows,
-            "models": models,
-            "modelGroups": model_groups,
-            "model_groups": model_groups,
-            "current_task": safe_current_task,
-            "source": "desktop-gui",
-            "takeover": bool(takeover),
-        }
-
-    def _model_group_for_type(self, workflow_type: str) -> str:
-        text = str(workflow_type or "").lower()
-        if "video" in text or "flf2v" in text:
-            return "video"
-        if "text" in text or "chat" in text:
-            return "text"
-        return "image"
 
     def _workflow_model_available(self, workflow: dict) -> bool:
         if workflow.get("api_mapping_status") == "pending_conversion":
@@ -8397,147 +7435,12 @@ class GatewayApp(WindowBase):
             return self._model_status.get("Qwen3.5") == "完整"
         return bool(workflow.get("enabled", True))
 
-    def _sync_to_server(self, server_url: str = "", status: str = "", takeover: bool = False):
-        if not self._server_session_token:
-            return
-        server_url = (server_url or self._server_url_value).rstrip("/")
-        if not server_url:
-            return
-        payload = self._sync_payload(status=status, takeover=takeover)
-        if not payload["base_url"] or not payload["api_key"]:
-            raise RuntimeError("公网 URL 或 API Key 尚未就绪")
 
-        import urllib.request as ur
-        req = ur.Request(
-            f"{server_url}/api/client/local-session/sync",
-            data=json.dumps(payload).encode("utf-8"),
-            method="POST",
-            headers=self._json_headers(server_url, self._server_session_token),
-        )
-        with _open_platform_request(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
 
-    def _sync_to_server_with_retry(self, server_url: str = "", status: str = "", max_retries: int = SERVER_SYNC_MAX_RETRIES, takeover: bool = False):
-        last_error = None
-        attempts = max(1, int(max_retries or 1))
-        for attempt in range(1, attempts + 1):
-            if self._shutting_down:
-                raise RuntimeError("客户端正在退出，已取消服务端同步")
-            try:
-                result = self._sync_to_server(server_url, status, takeover=takeover)
-                if self._shutting_down:
-                    raise RuntimeError("客户端正在退出，已取消服务端同步")
-                self._server_sync_fail_count = 0
-                return result
-            except Exception as ex:
-                if self._is_session_replaced_error(ex):
-                    self._post_to_ui(self._handle_remote_session_replaced)
-                    raise ex
-                last_error = ex
-                self._server_sync_fail_count = attempt
-                if attempt < attempts:
-                    self._post_to_ui(
-                        lambda a=attempt: self._set_light("server", "loading", f"重试 {a}/{attempts}")
-                    )
-                    delay = min(2 * attempt, 6)
-                    deadline = time.monotonic() + delay
-                    while time.monotonic() < deadline:
-                        if self._shutting_down:
-                            raise RuntimeError("客户端正在退出，已取消服务端同步")
-                        time.sleep(min(0.1, deadline - time.monotonic()))
-        raise last_error
 
-    def _is_session_replaced_error(self, error: Exception) -> bool:
-        code = getattr(error, "code", None)
-        if code != 409:
-            return False
-        friendly = self._format_http_error(error)
-        return "LOCAL_CLIENT_SESSION_REPLACED" in friendly or "其他客户端" in friendly
 
-    def _handle_remote_session_replaced(self):
-        self._server_session_token = ""
-        self._server_mode = "guest"
-        self._server_account_profile = {}
-        self._server_password_var.set("")
-        self._save_account_session()
-        self._render_account_badge()
-        self._apply_account_visibility()
-        self._set_account_status("账号已在其他客户端登录，本客户端已停止同步。", "error")
-        self._set_light("server", "online", "本地模式")
 
-    def _notify_server_offline(self, server_url: str = "", token: str = ""):
-        session_token = token or self._server_session_token
-        if self._offline_notice_sent or not session_token:
-            return
-        self._offline_notice_sent = True
-        server_url = (server_url or self._server_url_value or "https://ai.lol-lu.site").rstrip("/")
-        if not server_url:
-            return
-        try:
-            import urllib.request as ur
-            payload = self._sync_payload(status="offline")
-            req = ur.Request(
-                f"{server_url}/api/client/local-session/offline",
-                data=json.dumps(payload).encode("utf-8"),
-                method="POST",
-                headers=self._json_headers(server_url, session_token),
-            )
-            with _open_platform_request(req, timeout=5) as resp:
-                resp.read()
-        except Exception as ex:
-            print(f"[Account] offline notify failed: {ex}")
 
-    def _heartbeat_loop(self):
-        while self._heartbeat_run:
-            time.sleep(30)
-            if self._shutting_down or not self._server_session_token:
-                continue
-            try:
-                self._sync_to_server_with_retry(max_retries=SERVER_SYNC_MAX_RETRIES)
-                if self._server_user_email:
-                    self.after(0, lambda: self._set_account_status(f"已同步：{self._server_user_email}", "success"))
-                self.after(0, lambda: self._set_light("server", "online", "已同步"))
-            except Exception as ex:
-                friendly = self._format_http_error(ex)
-                self.after(0, lambda e=friendly: self._set_account_status(f"同步异常：{e}", "error"))
-                self.after(0, lambda: self._set_light("server", "offline", "同步失败"))
-
-    def _refresh_saved_login_and_sync(self):
-        if self._initial_session_sync_done or self._server_mode != "logged_in" or not self._server_session_token:
-            return
-        if not self._tunnel_url or not self._api_key:
-            return
-        self._initial_session_sync_done = True
-
-        def _worker():
-            server_url = (self._server_url_value or "https://ai.lol-lu.site").rstrip("/")
-            try:
-                profile = self._fetch_account_profile(server_url, self._server_session_token)
-                if profile:
-                    self._server_account_profile = profile
-                    user = profile.get("user") if isinstance(profile.get("user"), dict) else {}
-                    self._server_user_email = user.get("email") or self._server_user_email
-                self._sync_to_server_with_retry(server_url, max_retries=SERVER_SYNC_MAX_RETRIES)
-                self._save_account_session()
-                email = self._server_user_email or "账号"
-                self.after(0, self._render_account_badge)
-                self.after(0, lambda: self._set_account_status(f"已自动同步：{email}", "success"))
-                self.after(0, lambda: self._set_light("server", "online", "已同步"))
-            except Exception as ex:
-                friendly = self._format_http_error(ex)
-                if "UNAUTHENTICATED" in friendly or "Please log in" in friendly or "HTTP 401" in friendly:
-                    self._clear_account_session()
-                    self._server_mode = "guest"
-                    self._save_account_session()
-                    self.after(0, self._render_account_badge)
-                    self.after(0, self._apply_account_visibility)
-                    self.after(0, lambda: self._set_account_status("平台登录已过期，本地功能不受影响", "warn"))
-                    self.after(0, lambda: self._set_light("server", "online", "本地模式"))
-                else:
-                    self.after(0, lambda e=friendly: self._set_account_status(f"自动同步失败：{e}", "error"))
-                    self.after(0, lambda: self._set_light("server", "offline", "同步失败"))
-
-        threading.Thread(target=_worker, daemon=True).start()
 
     def _selected_workflow_path(self) -> str:
         workflow_id = self._workflow_mode.get()
@@ -8548,15 +7451,7 @@ class GatewayApp(WindowBase):
     def _selected_image_model(self) -> str:
         return "flux_t2i_v1"
 
-    def _open_server_url(self, path: str):
-        base = (self._get_server_url() or self._server_url_value or "https://ai.lol-lu.site").rstrip("/")
-        try:
-            webbrowser.open(f"{base}{path}")
-        except Exception as ex:
-            messagebox.showinfo("提示", f"请在浏览器打开：{base}{path}\n\n{ex}")
 
-    def _open_register(self):
-        self._open_server_url("/?auth=register")
 
     def _copy_ark_image_example(self):
         url = self._tunnel_url or API_BASE
@@ -9985,7 +8880,6 @@ class GatewayApp(WindowBase):
         self._update_workflow_display(data)
         if hasattr(self, "_dashboard_pages"):
             self._dashboard_pages.refresh(data)
-        self._refresh_saved_login_and_sync()
 
     def _on_health_update(self, data: dict):
         if self._shutting_down:
@@ -10049,9 +8943,6 @@ class GatewayApp(WindowBase):
         if ts == "online" and url and url != self._tunnel_url:
             self._tunnel_url = url
             self._set_public_url(url)
-            self._initial_session_sync_done = False
-            if self._server_mode == "logged_in" and self._server_session_token and self._api_key:
-                threading.Thread(target=self._refresh_saved_login_and_sync, daemon=True).start()
 
         if ts == "online":
             parts = ["公网连接已建立"]
@@ -10131,12 +9022,6 @@ class GatewayApp(WindowBase):
             return
         if key == "tunnel":
             threading.Thread(target=self._retry_tunnel_service, daemon=True).start()
-            return
-        if key == "server":
-            threading.Thread(
-                target=lambda: self._sync_to_server_with_retry(max_retries=SERVER_SYNC_MAX_RETRIES),
-                daemon=True,
-            ).start()
             return
         self._request_backend_start("启动后台")
 
@@ -10468,10 +9353,7 @@ class GatewayApp(WindowBase):
 
         self._shutting_down = True
         self._anim_running = False
-        self._heartbeat_run = False
         self._poll_run = False
-        if self._server_session_token:
-            threading.Thread(target=self._notify_server_offline, daemon=True).start()
 
         popup = tk.Toplevel(self)
         popup.title("正在关闭")
@@ -10633,7 +9515,6 @@ class GatewayApp(WindowBase):
 
     def _final_process_cleanup(self, timeout=4):
         """Non-UI, idempotent cleanup used by every final exit path."""
-        self._heartbeat_run = False
         self._poll_run = False
         self._shutting_down = True
         results = {}
@@ -10716,7 +9597,6 @@ class GatewayApp(WindowBase):
     def _force_destroy(self, popup):
         """Force means close owned Jobs now; it never bypasses cleanup."""
         self._poll_run = False
-        self._heartbeat_run = False
 
         def cleanup_and_finish():
             errors = self._final_process_cleanup(timeout=6)

@@ -27,21 +27,6 @@ class RuntimeMaintenanceTests(unittest.TestCase):
         app._last_health = {}
         return app
 
-    def test_user_not_found_is_presented_as_wrong_credentials(self):
-        app = self._app()
-        response = io.BytesIO(
-            b'{"error":{"code":"USER_NOT_FOUND","message":"account not registered"}}'
-        )
-        error = urllib.error.HTTPError(
-            "https://example.test/api/auth/login",
-            401,
-            "Unauthorized",
-            {},
-            response,
-        )
-
-        self.assertEqual(app._format_http_error(error), "用户名或密码错误")
-
     def test_model_download_sources_include_domestic_and_official_links(self):
         app = self._app()
         official = "https://huggingface.co/org/repo/resolve/main/model.safetensors"
@@ -1014,7 +999,6 @@ class RuntimeMaintenanceTests(unittest.TestCase):
     def test_runtime_update_handoff_closes_gui_for_external_swap(self):
         app = self._app()
         app._anim_running = True
-        app._heartbeat_run = True
         app._poll_run = True
         app._complete_destroy = mock.Mock()
         popup = mock.sentinel.popup
@@ -1023,7 +1007,6 @@ class RuntimeMaintenanceTests(unittest.TestCase):
 
         self.assertTrue(app._shutting_down)
         self.assertFalse(app._anim_running)
-        self.assertFalse(app._heartbeat_run)
         self.assertFalse(app._poll_run)
         app._complete_destroy.assert_called_once_with(popup)
 

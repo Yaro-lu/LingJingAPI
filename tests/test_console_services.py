@@ -626,8 +626,6 @@ class ConsoleServiceTests(unittest.TestCase):
 
     def test_health_status_adopts_reported_local_api(self):
         app = self._app()
-        app._server_mode = "guest"
-        app._server_session_token = ""
         app._comfy_proc = None
         app._comfy_starting_until = 0
 
@@ -646,11 +644,8 @@ class ConsoleServiceTests(unittest.TestCase):
         app = self._app()
         app._tunnel_url = "https://stale.example"
         app._local_url = "http://127.0.0.1:19001"
-        app._initial_session_sync_done = True
         app._set_public_url = mock.Mock()
         app._set_local_url = mock.Mock()
-        app._server_mode = "guest"
-        app._server_session_token = ""
         app._api_key = ""
         app._comfy_proc = None
         app._comfy_starting_until = 0

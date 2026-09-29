@@ -146,7 +146,7 @@ class RecognitionCallbackTests(unittest.TestCase):
             app = self.app()
             app._workflow_registry = mock.Mock(return_value=registry)
             app._publish_local_workflows = mock.Mock()
-            app._reload_workflows_and_sync = mock.Mock()
+            app._reload_workflows = mock.Mock()
             actions = {}
             app._button = mock.Mock(side_effect=lambda parent, label, command, style: actions.setdefault(label, command) and mock.MagicMock())
             editor, reference = mock.MagicMock(), mock.MagicMock()

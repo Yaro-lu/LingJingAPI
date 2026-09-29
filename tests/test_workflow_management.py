@@ -207,7 +207,7 @@ class WorkflowManagementTests(unittest.TestCase):
         app = self._app()
         app._footer_label = mock.Mock()
         app._publish_local_workflows = mock.Mock()
-        app._reload_workflows_and_sync = mock.Mock()
+        app._reload_workflows = mock.Mock()
         app._post_to_ui = mock.Mock(return_value=True)
         app._show_workflow_import_result = mock.Mock()
 
@@ -245,7 +245,7 @@ class WorkflowManagementTests(unittest.TestCase):
         app._workflow_registry = mock.Mock(return_value=registry)
         app._workflow_records_from_registry = mock.Mock(return_value=[])
         app._publish_local_workflows = mock.Mock()
-        app._reload_workflows_and_sync = mock.Mock()
+        app._reload_workflows = mock.Mock()
         app._run_ui_backend_step = lambda callback, timeout=20: (callback() or True)
 
         began = time.monotonic()

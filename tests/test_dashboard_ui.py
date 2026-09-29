@@ -272,7 +272,6 @@ class DashboardShellTests(unittest.TestCase):
         """The static shell must not require backend threads to render."""
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -299,13 +298,17 @@ class DashboardShellTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     tuple(app._light_groups),
-                    ("server", "env", "comfyui", "tunnel", "api"),
+                    ("env", "comfyui", "tunnel", "api"),
                     "The approved runtime-status card must keep its component order",
                 )
 
                 info_texts = set(self._all_text(app._info_frame))
                 self.assertTrue({"公网 URL", "本地 URL", "API Key"} <= info_texts)
                 self.assertEqual(app._local_url_label.cget("text"), main_gateway.API_BASE)
+                title_texts = set(self._all_text(app._content_root))
+                self.assertFalse({"本地模式", "远程模式", "未登录", "登录并同步"} & title_texts)
+                self.assertFalse(hasattr(GatewayApp, "_load_account_session_state"))
+                self.assertFalse(hasattr(GatewayApp, "_sync_to_server"))
 
                 app._show_page("overview")
                 app.geometry("1090x700")
@@ -389,7 +392,6 @@ class DashboardShellTests(unittest.TestCase):
         """The approved console card deep-links without starting an install."""
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -418,7 +420,6 @@ class DashboardShellTests(unittest.TestCase):
     def test_resources_page_exposes_environment_and_model_maintenance(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -442,7 +443,6 @@ class DashboardShellTests(unittest.TestCase):
         repair_runtime = mock.Mock()
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
             mock.patch.object(
                 GatewayApp,
                 "_start_comfyui_update",
@@ -494,7 +494,6 @@ class DashboardShellTests(unittest.TestCase):
     def test_available_release_shows_green_dot_and_fixed_release_target(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -579,7 +578,6 @@ class DashboardShellTests(unittest.TestCase):
     def test_overview_workflow_catalog_has_a_reachable_vertical_scrollbar(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -640,7 +638,6 @@ class DashboardShellTests(unittest.TestCase):
 
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -658,7 +655,6 @@ class DashboardShellTests(unittest.TestCase):
     def test_scrollable_resource_and_settings_pages_use_brand_scrollbars_and_wheel(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -715,7 +711,6 @@ class DashboardShellTests(unittest.TestCase):
         """One-click repair must try the configured package URL first."""
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
             mock.patch.object(main_gateway, "_runtime_has_package_files", return_value=False),
         ):
             app = GatewayApp()
@@ -749,7 +744,6 @@ class DashboardShellTests(unittest.TestCase):
         dialog = None
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -1303,7 +1297,6 @@ class DashboardShellTests(unittest.TestCase):
         """The manual GitHub fallback appears only after automatic pull failure."""
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -1345,7 +1338,6 @@ class DashboardShellTests(unittest.TestCase):
     def test_runtime_network_error_switches_to_manual_fallback(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -1376,7 +1368,6 @@ class DashboardShellTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -1415,7 +1406,6 @@ class DashboardShellTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -1481,173 +1471,19 @@ class DashboardShellTests(unittest.TestCase):
         self.assertFalse(result["package_ready"])
         self.assertIn("缺少 1 项", result["message"])
 
-    def test_login_validation_reports_inside_popup_callback(self):
-        app = object.__new__(GatewayApp)
-        app._server_sync_running = False
-        app._get_server_url = lambda: ""
-        app._get_server_email = lambda: ""
-        app._get_server_password = lambda: ""
-        app._set_account_status = mock.Mock()
-        results = []
 
-        app._login_and_sync(on_result=lambda success, message: results.append((success, message)))
 
-        self.assertEqual(results, [(False, "请填写服务端地址。")])
-        app._set_account_status.assert_called_once_with("请填写服务端地址", "error")
 
-    def test_login_rejects_nonlocal_plain_http_server(self):
-        app = object.__new__(GatewayApp)
-        app._server_sync_running = False
-        app._get_server_url = lambda: "http://api.example.com"
-        app._get_server_email = lambda: "user@example.com"
-        app._get_server_password = lambda: "password"
-        app._set_account_status = mock.Mock()
-        results = []
 
-        app._login_and_sync(on_result=lambda success, message: results.append((success, message)))
 
-        self.assertEqual(len(results), 1)
-        self.assertFalse(results[0][0])
-        self.assertIn("HTTPS", results[0][1])
-        app._set_account_status.assert_called_once()
 
-    def test_dotted_email_is_preserved_and_valid(self):
-        email = "first.last@example.com"
 
-        self.assertEqual(main_gateway._normalize_account_email(email), email)
-        self.assertEqual(main_gateway._account_email_error(email), "")
 
-    def test_full_width_email_punctuation_is_normalized_before_login(self):
-        self.assertEqual(
-            main_gateway._normalize_account_email("  first.last＠EXAMPLE．COM  "),
-            "first.last@example.com",
-        )
 
-    def test_login_submits_valid_dotted_email_without_removing_periods(self):
-        app = object.__new__(GatewayApp)
-        app._server_sync_running = False
-        app._get_server_url = lambda: "https://api.example.com"
-        app._get_server_email = lambda: "first.last@example.com"
-        app._get_server_password = lambda: "password"
-        app._set_account_status = mock.Mock()
-        app._set_account_form_values = mock.Mock()
-
-        with mock.patch.object(threading, "Thread") as thread_cls:
-            app._login_and_sync()
-
-        submitted = thread_cls.call_args.kwargs["args"]
-        self.assertEqual(submitted[1], "first.last@example.com")
-        app._set_account_form_values.assert_called_once_with(email="first.last@example.com")
-
-    def test_json_headers_use_current_app_version(self):
-        app = object.__new__(GatewayApp)
-
-        headers = app._json_headers("https://api.example.com", "test-token")
-
-        self.assertIn(f"LingJingClient/{main_gateway.APP_VERSION}", headers["User-Agent"])
-        self.assertEqual(headers["Origin"], "https://api.example.com")
-        self.assertEqual(headers["Authorization"], "Bearer test-token")
-
-    def test_platform_sync_does_not_upload_prompt_or_task_title(self):
-        app = object.__new__(GatewayApp)
-        app._last_health = {
-            "version": "1.0.1",
-            "session_id": "session-test",
-            "workflows": [{"id": "image-test", "name": "图片测试", "type": "image"}],
-            "current_task": {
-                "task_id": "task-test",
-                "workflow_id": "image-test",
-                "status": "running",
-                "progress_percent": 25,
-                "prompt_summary": "private prompt",
-                "prompt": "private prompt full",
-                "title": "private title",
-            },
-        }
-        app._tunnel_url = "https://public.example"
-        app._api_key = "sk-local-test"
-        app._client_instance_id = "instance-test"
-        app._workflow_model_available = mock.Mock(return_value=True)
-
-        payload = app._sync_payload()
-
-        self.assertEqual(payload["current_task"]["task_id"], "task-test")
-        self.assertEqual(payload["current_task"]["progress_percent"], 25)
-        self.assertNotIn("prompt_summary", payload["current_task"])
-        self.assertNotIn("prompt", payload["current_task"])
-        self.assertNotIn("title", payload["current_task"])
-
-    def test_account_session_token_is_protected_at_rest(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.object(main_gateway, "BASE_DIR", Path(temp_dir)):
-                app = object.__new__(GatewayApp)
-                app._server_mode = "logged_in"
-                app._server_url_value = "https://api.example.com"
-                app._server_user_email = "user@example.com"
-                app._server_session_token = "private-session-token"
-                app._server_account_profile = {}
-
-                app._save_account_session()
-                saved = json.loads(app._account_session_path().read_text(encoding="utf-8"))
-
-                self.assertNotIn("session_token", saved)
-                self.assertNotIn("private-session-token", json.dumps(saved))
-                restored = object.__new__(GatewayApp)
-                restored._server_mode = "unset"
-                restored._server_url_value = "https://ai.lol-lu.site"
-                restored._server_user_email = ""
-                restored._server_session_token = ""
-                restored._server_account_profile = {}
-                restored._load_account_session_state()
-                self.assertEqual(restored._server_session_token, "private-session-token")
-
-    def test_legacy_account_session_token_is_migrated_when_loaded(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with mock.patch.object(main_gateway, "BASE_DIR", Path(temp_dir)):
-                path = Path(temp_dir) / "runtime" / "account_session.json"
-                path.parent.mkdir(parents=True)
-                path.write_text(
-                    json.dumps(
-                        {
-                            "mode": "logged_in",
-                            "server_url": "https://api.example.com",
-                            "email": "user@example.com",
-                            "session_token": "legacy-plaintext-token",
-                            "profile": {},
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-                restored = object.__new__(GatewayApp)
-                restored._server_mode = "unset"
-                restored._server_url_value = "https://ai.lol-lu.site"
-                restored._server_user_email = ""
-                restored._server_session_token = ""
-                restored._server_account_profile = {}
-
-                restored._load_account_session_state()
-                saved = json.loads(path.read_text(encoding="utf-8"))
-
-                self.assertEqual(restored._server_session_token, "legacy-plaintext-token")
-                self.assertNotIn("session_token", saved)
-                self.assertNotIn("legacy-plaintext-token", json.dumps(saved))
-                self.assertTrue(saved["session_token_protected"].startswith("dpapi:"))
-
-    def test_local_mode_does_not_start_platform_session_refresh(self):
-        app = object.__new__(GatewayApp)
-        app._initial_session_sync_done = False
-        app._server_mode = "guest"
-        app._server_session_token = ""
-        app._tunnel_url = "https://example.test"
-        app._api_key = "sk-local-test"
-        with mock.patch.object(threading, "Thread") as thread:
-            app._refresh_saved_login_and_sync()
-        thread.assert_not_called()
 
     def test_many_long_named_workflows_keep_every_management_action_reachable(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -1733,7 +1569,6 @@ class DashboardShellTests(unittest.TestCase):
     def test_classic_tk_button_converts_pixel_width_to_character_width(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             try:
@@ -1918,7 +1753,6 @@ class DashboardShellTests(unittest.TestCase):
     def test_maintenance_progress_can_collapse_to_bottom_right_and_restore(self):
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
         ):
             app = GatewayApp()
             dialog = None
@@ -1963,7 +1797,6 @@ class DashboardShellTests(unittest.TestCase):
         ]
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
             mock.patch.object(GatewayApp, "_missing_model_items", return_value=missing),
         ):
             app = GatewayApp()
@@ -2030,7 +1863,6 @@ class DashboardShellTests(unittest.TestCase):
         }
         with (
             mock.patch.object(threading.Thread, "start", lambda _thread: None),
-            mock.patch.object(GatewayApp, "_maybe_show_login_prompt", lambda _app: None),
             mock.patch.object(
                 GatewayApp,
                 "_missing_model_items",
