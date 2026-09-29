@@ -142,7 +142,11 @@ MODEL_REQUIREMENTS = {
         "items": [
             {
                 "path": "diffusion_models/flux-2-klein-9b-fp8.safetensors",
-                "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/resolve/main/flux-2-klein-9b-fp8.safetensors",
+                # Public pinned copy; retain the original file's size and SHA256 checks.
+                "url": "https://huggingface.co/bhatugan/Files/resolve/c360544e1ad1d130b3fc2bc32615d86c092b9cad/flux-2-klein-9b-fp8.safetensors",
+                "fallback_urls": [
+                    "https://huggingface.co/hfmaster/models-moved/resolve/135ab0aa526a5be5e61677043b1ec2fbbed7cb3d/flux2/flux-2-klein-9b-fp8.safetensors",
+                ],
                 "size_bytes": 9_433_061_528,
                 "sha256": "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee",
             },

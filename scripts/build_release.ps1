@@ -144,6 +144,9 @@ function Test-ExcludedRelativePath {
         if ($portablePackage -match '^lib\\site-packages\\comfy[^\\]*(?:\\|$)') {
             return $true
         }
+        if ($portablePackage -match '^lib\\site-packages\\crypto\\selftest(?:\\|$)') {
+            return $true
+        }
         if ($portablePackage -match '^lib\\site-packages\\(?:diffusers|pip|setuptools|_distutils_hack)(?:[-.\\]|$)') {
             return $true
         }
@@ -375,6 +378,7 @@ function Assert-StagingPolicy {
         '^app/updater_runtime/(?!pip(?:/|$)|pip-license\.txt$)',
         '^runtime/python/lib/site-packages/(?:diffusers|pip|setuptools|_distutils_hack)(?:[-./]|$)',
         '^runtime/python/lib/site-packages/comfy[^/]*(?:/|$)',
+        '^runtime/python/lib/site-packages/crypto/selftest(?:/|$)',
         '^\.venv/share(/|$)',
         '^\.venv/lib/site-packages/(?:torch|torchaudio|torchvision|triton|nvidia)(?:[-./]|$)',
         '^bin/cloudflared\.exe$',
@@ -385,7 +389,7 @@ function Assert-StagingPolicy {
     )
 
     $secretPatterns = [ordered]@{
-        'private-key' = '-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'
+        'private-key' = '-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----\r?\n[ \t]*[A-Za-z0-9+/=]{20,}'
         'github-token' = '\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,})\b'
         'aws-access-key' = '\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'
         'api-secret' = '\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}\b'

@@ -17,12 +17,14 @@ import queue
 import re
 import shutil
 import tempfile
+import http.client
 import webbrowser
 import msvcrt
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlsplit
+import urllib.error as urllib_error
 import urllib.request as urllib_request
 
 try:
@@ -147,13 +149,15 @@ PROJECT_LATEST_RELEASE_API_URL = (
     f"https://api.github.com/repos/{PROJECT_REPOSITORY}/releases/latest"
 )
 MAX_RELEASE_METADATA_BYTES = 64 * 1024
+MODEL_DOWNLOAD_RANGE_CHUNK_BYTES = 256 * 1024 * 1024
+MODEL_DOWNLOAD_READ_BYTES = 64 * 1024
 
 
 def _rank_model_download_sources(urls: list[str], expected_size: int) -> list[str]:
     """Probe a small range from each source; keep unreachable sources as fallbacks."""
     if len(urls) < 2 or expected_size <= 0:
         return list(urls)
-    sample_size = min(128 * 1024, expected_size)
+    sample_size = min(2 * 1024 * 1024, expected_size)
 
     def speed(url: str) -> float:
         request = urllib_request.Request(
@@ -196,12 +200,39 @@ def _rank_model_download_sources(urls: list[str], expected_size: int) -> list[st
         except Exception:
             return 0.0
 
-    with ThreadPoolExecutor(max_workers=min(len(urls), 3)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(urls), 4)) as executor:
         futures = [executor.submit(speed, url) for url in urls]
         speeds = [future.result() for future in futures]
     return [url for _, url in sorted(
         enumerate(urls), key=lambda item: (-speeds[item[0]], item[0])
     )]
+
+
+def _retryable_model_download_error(error: Exception) -> bool:
+    """Retry interrupted transfers, but do not loop on rejected or invalid sources."""
+    if isinstance(error, urllib_error.HTTPError):
+        return error.code in {408, 429, 500, 502, 503, 504}
+    if isinstance(error, (urllib_error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead)):
+        return True
+    if str(error).startswith("下载不完整（"):
+        return True
+    if str(error).startswith(("模型文件大小不匹配（", "服务器返回", "下载源文件已发生变化")):
+        return True
+    if isinstance(error, OSError):
+        return getattr(error, "winerror", None) in {10053, 10054, 10060, 10061}
+    return False
+
+
+def _model_download_error_message(error: Exception) -> str:
+    if isinstance(error, urllib_error.HTTPError):
+        if error.code in {401, 403}:
+            return (
+                f"下载源拒绝访问（HTTP {error.code}）。模型仓库可能需要登录并同意许可；"
+                "请在浏览器下载该文件，再到“模型与环境”选择本地模型。"
+            )
+        if error.code == 404:
+            return "下载地址不存在（HTTP 404），请在“模型与环境”核对模型来源。"
+    return str(error)
 
 
 
@@ -1919,6 +1950,7 @@ class GatewayApp(WindowBase):
             "current": None,
             "hidden": None,
             "cancelled": threading.Event(),
+            "model_retries": {},
         }
         if not self._environment_status.get("ready"):
             if (
@@ -2049,6 +2081,19 @@ class GatewayApp(WindowBase):
             run["index"] += 1
             self._quick_repair_next_model(run)
             return
+        if state == "failed" and control.get("download_retryable"):
+            retries = run.setdefault("model_retries", {})
+            count = retries.get(run["index"], 0)
+            if count < 2:
+                retries[run["index"]] = count + 1
+                delay = 5 if count == 0 else 15
+                run["phase"] = "retry-wait"
+                self._quick_repair_popup["status_var"].set(
+                    f"{Path(control['item']['path']).name} 下载中断，保留断点，"
+                    f"{delay} 秒后自动重试（第 {count + 1}/2 次）。"
+                )
+                self.after(delay * 1000, lambda: self._quick_repair_retry_model(run, control))
+                return
         if state in {"failed", "cancelled"}:
             self._quick_repair_fail(
                 f"{Path(control['item']['path']).name}：{control.get('status_text') or '下载未完成'}"
@@ -2064,6 +2109,18 @@ class GatewayApp(WindowBase):
             f"{control.get('status_text') or '正在连接下载源'}"
         )
         self.after(600, lambda: self._quick_repair_poll_model(run))
+
+    def _quick_repair_retry_model(self, run: dict, control: dict):
+        if (
+            self._quick_repair_run is not run
+            or self._quick_repair_popup is None
+            or run.get("phase") != "retry-wait"
+            or (run.get("cancelled") is not None and run["cancelled"].is_set())
+        ):
+            return
+        run["phase"] = "models"
+        self._start_model_download(control)
+        self._quick_repair_poll_model(run)
 
     def _quick_repair_verify(self, run: dict):
         if self._quick_repair_run is not run or self._quick_repair_popup is None:
@@ -3199,6 +3256,19 @@ class GatewayApp(WindowBase):
                 unique.append((label, source_url))
         return unique
 
+    @classmethod
+    def _model_download_sources_for_item(cls, item: dict) -> list[tuple[str, str]]:
+        """Include verified public backups for a pinned model file."""
+        sources: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        urls = [item.get("url", ""), *(item.get("fallback_urls") or [])]
+        for index, url in enumerate(urls):
+            for label, source_url in cls._model_download_sources(url):
+                if source_url not in seen:
+                    seen.add(source_url)
+                    sources.append((f"备用{label}" if index else label, source_url))
+        return sources
+
     def _missing_model_items(self, model_key: str) -> list:
         spec = MODEL_REQUIREMENTS.get(model_key, {})
         items = []
@@ -3452,7 +3522,7 @@ class GatewayApp(WindowBase):
             saved = load_saved_source(BASE_DIR / "runtime" / "model_sources.json", rel_path)
             if saved:
                 item = {**item, **saved}
-        sources = self._model_download_sources(item.get("url", ""))
+        sources = self._model_download_sources_for_item(item)
         url = sources[0][1] if sources else ""
         target = _models_dir() / rel_path
         filename = Path(rel_path).name or f"model_{index}"
@@ -3937,6 +4007,9 @@ class GatewayApp(WindowBase):
             return
         previous_state = control.get("state")
         control["state"] = "downloading"
+        control["download_retryable"] = False
+        control.pop("download_speed_sample", None)
+        control.pop("download_speed_mib_s", None)
         if control.get("progress_percent") is None or previous_state == "cancelled":
             control["progress_percent"] = 0.0
         pause_event = control.get("pause_event")
@@ -4034,7 +4107,7 @@ class GatewayApp(WindowBase):
         expected_size = int((control.get("item") or {}).get("size_bytes") or 0)
         expected_sha256 = str((control.get("item") or {}).get("sha256") or "").strip()
         max_retries_without_progress = 5
-        max_retries_per_source = 64
+        max_retries_per_source = 8
 
         if expected_size <= 0 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
             self.after(
@@ -4141,15 +4214,23 @@ class GatewayApp(WindowBase):
                     discard_partial()
                 resume_from = part_path.stat().st_size if part_path.exists() else 0
                 headers = {"User-Agent": "lingjing-model-downloader/1.0"}
-                if resume_from:
+                chunk_end = None
+                if expected_size >= MODEL_DOWNLOAD_RANGE_CHUNK_BYTES:
+                    chunk_end = min(
+                        expected_size - 1,
+                        resume_from + MODEL_DOWNLOAD_RANGE_CHUNK_BYTES - 1,
+                    )
+                    headers["Range"] = f"bytes={resume_from}-{chunk_end}"
+                elif resume_from:
                     headers["Range"] = f"bytes={resume_from}-"
+                if resume_from:
                     if resume_metadata.get("url") == url and resume_metadata.get("validator"):
                         headers["If-Range"] = str(resume_metadata["validator"])
                 req = ur.Request(url, headers=headers)
                 try:
                     with _open_download_request(
                         req,
-                        timeout=30,
+                        timeout=15,
                         allowed_suffixes=MODEL_DOWNLOAD_REDIRECT_SUFFIXES,
                     ) as resp:
                         _validate_download_response_url(
@@ -4168,12 +4249,12 @@ class GatewayApp(WindowBase):
                         if status_code == 206:
                             content_range = str(resp.headers.get("Content-Range") or "").strip()
                             match = re.fullmatch(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", content_range)
-                            if not resume_from or not match:
+                            if "Range" not in headers or not match:
                                 discard_partial()
                                 raise IOError("服务器返回了无效的断点续传范围")
                             start, end = int(match.group(1)), int(match.group(2))
                             total_value = match.group(3)
-                            if start != resume_from or end < start:
+                            if start != resume_from or end < start or (chunk_end is not None and end > chunk_end):
                                 discard_partial()
                                 raise IOError("服务器返回的断点位置与本地文件不一致")
                             if content_length and content_length != end - start + 1:
@@ -4189,6 +4270,7 @@ class GatewayApp(WindowBase):
                                 raise IOError("下载源文件已发生变化，正在重新下载")
                             save_resume_metadata(validator)
                             total = int(total_value) if total_value != "*" else 0
+                            response_end = end + 1
                         else:
                             if status_code != 200:
                                 raise IOError("服务器返回了无效的下载状态")
@@ -4198,9 +4280,14 @@ class GatewayApp(WindowBase):
                                     f"模型文件大小不匹配（应为 {expected_size} 字节，服务器返回 {content_length} 字节）"
                                 )
                             total = content_length
+                            response_end = expected_size or total
                             save_resume_metadata(validator)
                         done = resume_from
                         mode = "ab" if resume_from else "wb"
+                        speed_check_time = time.monotonic()
+                        speed_check_bytes = done
+                        last_update_time = speed_check_time
+                        last_update_bytes = done
                         with open(part_path, mode) as f:
                             while True:
                                 if cancelled():
@@ -4209,7 +4296,7 @@ class GatewayApp(WindowBase):
                                 if pause_event and pause_event.is_set():
                                     self.after(0, lambda: self._set_model_download_status(control, "已暂停，点击继续可断点续传"))
                                     return
-                                chunk = resp.read(1024 * 1024)
+                                chunk = resp.read(MODEL_DOWNLOAD_READ_BYTES)
                                 if cancelled():
                                     return
                                 if not chunk:
@@ -4218,27 +4305,43 @@ class GatewayApp(WindowBase):
                                     raise IOError("下载数据超过模型清单声明的大小，已停止下载")
                                 f.write(chunk)
                                 done += len(chunk)
-                                if total:
-                                    percent = min(100, done * 100 / total)
-                                    self.after(0, lambda p=percent, d=done, t=total: self._update_model_download_progress(control, p, d, t))
-                                else:
-                                    self.after(0, lambda d=done: self._set_model_download_status(control, f"已下载 {d / 1024 / 1024:.1f} MB"))
-                        if total and done != total:
-                            raise IOError(f"下载不完整（应接收 {total} 字节，实际 {done} 字节）")
-                        if expected_size and done != expected_size:
-                            if status_code == 200 or done > expected_size:
+                                now = time.monotonic()
+                                if now - speed_check_time >= 20:
+                                    if done - speed_check_bytes < 1024 * 1024:
+                                        raise TimeoutError("下载源持续低速，正在切换下载源")
+                                    speed_check_time = now
+                                    speed_check_bytes = done
+                                if done - last_update_bytes >= 1024 * 1024 or now - last_update_time >= 1 or done == expected_size:
+                                    if total:
+                                        percent = min(100, done * 100 / total)
+                                        self.after(0, lambda p=percent, d=done, t=total: self._update_model_download_progress(control, p, d, t))
+                                    else:
+                                        self.after(0, lambda d=done: self._set_model_download_status(control, f"已下载 {d / 1024 / 1024:.1f} MB"))
+                                    last_update_time = now
+                                    last_update_bytes = done
+                        if response_end and done != response_end:
+                            raise IOError(f"下载不完整（应接收 {response_end} 字节，实际 {done} 字节）")
+                        if expected_size and done > expected_size:
+                            if status_code == 200:
                                 discard_partial()
                             raise IOError(
                                 f"模型文件大小不匹配（应为 {expected_size} 字节，实际 {done} 字节）"
                             )
+                    if expected_size and done < expected_size:
+                        attempt = 0
+                        source_retries = 0
+                        continue
                     break
-                except Exception:
+                except Exception as exc:
                     if cancelled():
                         return
                     progressed = part_path.exists() and part_path.stat().st_size > resume_from
                     attempt = 0 if progressed else attempt + 1
                     source_retries += 1
-                    if attempt > max_retries_without_progress or source_retries >= max_retries_per_source:
+                    if isinstance(exc, TimeoutError) and str(exc).startswith("下载源持续低速"):
+                        source_retries = max_retries_per_source
+                    retryable = _retryable_model_download_error(exc)
+                    if not retryable or attempt > max_retries_without_progress or source_retries >= max_retries_per_source:
                         source_index += 1
                         if source_index >= len(urls):
                             raise
@@ -4250,11 +4353,18 @@ class GatewayApp(WindowBase):
                             0,
                             lambda: self._set_model_download_status(
                                 control,
-                                "当前下载源反复中断，保留断点并切换备用源...",
+                                "当前下载源不可用，保留断点并切换备用源...",
                             ),
                         )
                         continue
-                    self.after(0, lambda n=source_retries: self._set_model_download_status(control, f"网络中断，保留断点并自动重连（第 {n} 次）..."))
+                    reason = (
+                        f"HTTP {exc.code}" if isinstance(exc, urllib_error.HTTPError)
+                        else "下载源持续低速" if isinstance(exc, TimeoutError) and str(exc).startswith("下载源持续低速")
+                        else type(exc).__name__
+                    )
+                    self.after(0, lambda n=source_retries, r=reason: self._set_model_download_status(
+                        control, f"连接中断（{r}），已保留断点，正在重连（第 {n} 次）..."
+                    ))
                     stop_event = control.get("stop_event")
                     delay = min(2 * max(1, attempt), 8)
                     if stop_event and stop_event.wait(delay):
@@ -4277,14 +4387,29 @@ class GatewayApp(WindowBase):
             self.after(0, lambda: self._finish_model_download(control))
         except Exception as exc:
             if not cancelled():
-                self.after(0, lambda e=str(exc): self._fail_model_download(control, e))
+                retryable = _retryable_model_download_error(exc)
+                message = _model_download_error_message(exc)
+                self.after(
+                    0,
+                    lambda: self._fail_model_download(control, message, retryable=retryable),
+                )
 
     def _update_model_download_progress(self, control: dict, percent: float, done: int, total: int):
         control = self._model_download_owner(control)
         control["progress_percent"] = float(percent)
+        now = time.monotonic()
+        sample = control.get("download_speed_sample")
+        if sample is None or done < sample[1] or now - sample[0] > 30:
+            control["download_speed_sample"] = (now, done)
+        elif now - sample[0] >= 1:
+            control["download_speed_mib_s"] = (done - sample[1]) / (now - sample[0]) / (1024 * 1024)
+            control["download_speed_sample"] = (now, done)
+        speed = float(control.get("download_speed_mib_s") or 0)
+        speed_text = f"  ·  {speed:.1f} MB/s" if speed > 0 else ""
+        percent_text = f"{percent:.1f}" if 0 < percent < 1 else f"{percent:.0f}"
         self._set_model_download_status(
             control,
-            f"{percent:.0f}%  {done / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB",
+            f"{percent_text}%  {done / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB{speed_text}",
         )
 
     def _finish_model_download(self, control: dict):
@@ -4300,16 +4425,21 @@ class GatewayApp(WindowBase):
             pass
         threading.Thread(target=self._recheck_models, daemon=True).start()
 
-    def _fail_model_download(self, control: dict, error: str):
+    def _fail_model_download(self, control: dict, error: str, *, retryable: bool = False):
         control = self._model_download_owner(control)
         if control.get("state") == "cancelling":
             return
         self._release_model_transfer(control)
         control["state"] = "failed"
+        control["download_retryable"] = retryable
         control["worker"] = None
-        self._set_model_download_status(control, f"下载失败，已保留断点：{error}")
+        target = control.get("target")
+        partial = Path(target).with_suffix(Path(target).suffix + ".part") if target else None
+        prefix = "下载失败，已保留断点" if partial and partial.is_file() else "下载失败"
+        self._set_model_download_status(control, f"{prefix}：{error}")
         try:
-            self._footer_label.config(text="  模型下载失败，请检查网络或稍后重试")
+            tip = "网络中断，可继续重试" if retryable else "请查看具体原因或选择本地模型"
+            self._footer_label.config(text=f"  模型下载失败，{tip}")
         except Exception:
             pass
 

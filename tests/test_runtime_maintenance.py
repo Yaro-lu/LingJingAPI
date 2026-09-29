@@ -37,6 +37,20 @@ class RuntimeMaintenanceTests(unittest.TestCase):
         self.assertTrue(sources[0][1].startswith("https://hf-mirror.com/"))
         self.assertEqual(sources[1], ("官方源", official))
 
+    def test_quick_repair_9b_uses_only_public_pinned_sources(self):
+        item = main_gateway.MODEL_REQUIREMENTS["Flux2"]["items"][0]
+        sources = GatewayApp._model_download_sources_for_item(item)
+
+        self.assertEqual(len(sources), 4)
+        self.assertEqual(
+            [label for label, _url in sources],
+            ["国内镜像", "官方源", "备用国内镜像", "备用官方源"],
+        )
+        self.assertTrue(all("black-forest-labs/FLUX.2-klein-9b-fp8" not in url for _label, url in sources))
+        self.assertTrue(all("/resolve/" in url for _label, url in sources))
+        self.assertEqual(item["size_bytes"], 9_433_061_528)
+        self.assertEqual(item["sha256"], "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee")
+
     def test_model_download_selects_the_faster_valid_source(self):
         mirror = "https://hf-mirror.com/org/model/resolve/main/model.safetensors"
         official = "https://huggingface.co/org/model/resolve/main/model.safetensors"
@@ -68,6 +82,118 @@ class RuntimeMaintenanceTests(unittest.TestCase):
                 main_gateway._rank_model_download_sources([mirror, official], 5),
                 [official, mirror],
             )
+
+    def test_large_model_download_uses_bounded_ranges_and_reassembles_file(self):
+        app = self._app()
+        app.after = lambda _delay, callback: callback()
+        app._set_model_download_status = mock.Mock()
+        app._finish_model_download = mock.Mock()
+        app._fail_model_download = mock.Mock()
+        app._update_model_download_progress = mock.Mock()
+        payload = b"model-data"
+        ranges = []
+
+        class Response(io.BytesIO):
+            status = 206
+
+            def __init__(self, start, end):
+                super().__init__(payload[start:end + 1])
+                self.headers = {
+                    "Content-Length": str(end - start + 1),
+                    "Content-Range": f"bytes {start}-{end}/{len(payload)}",
+                    "ETag": '"stable"',
+                }
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        def open_request(request, **_kwargs):
+            value = request.get_header("Range")
+            ranges.append(value)
+            start, end = (int(value.removeprefix("bytes=").split("-")[i]) for i in (0, 1))
+            return Response(start, end)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "model.safetensors"
+            control = {
+                "url": "https://example.invalid/model.safetensors",
+                "target": target,
+                "item": {"size_bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()},
+                "pause_event": threading.Event(), "status_var": mock.Mock(),
+            }
+            with (
+                mock.patch.object(main_gateway, "MODEL_DOWNLOAD_RANGE_CHUNK_BYTES", 4),
+                mock.patch.object(main_gateway, "_open_download_request", side_effect=open_request),
+            ):
+                app._download_model_file(control)
+
+            self.assertEqual(ranges, ["bytes=0-3", "bytes=4-7", "bytes=8-9"])
+            self.assertEqual(target.read_bytes(), payload)
+            app._finish_model_download.assert_called_once_with(control)
+            app._fail_model_download.assert_not_called()
+
+    def test_large_model_download_resumes_existing_partial_with_bounded_ranges(self):
+        app = self._app()
+        app.after = lambda _delay, callback: callback()
+        app._set_model_download_status = mock.Mock()
+        app._finish_model_download = mock.Mock()
+        app._fail_model_download = mock.Mock()
+        app._update_model_download_progress = mock.Mock()
+        payload = b"model-data"
+        url = "https://example.invalid/model.safetensors"
+        ranges = []
+
+        class Response(io.BytesIO):
+            status = 206
+
+            def __init__(self, start, end):
+                super().__init__(payload[start:end + 1])
+                self.headers = {
+                    "Content-Length": str(end - start + 1),
+                    "Content-Range": f"bytes {start}-{end}/{len(payload)}",
+                    "ETag": '"stable"',
+                }
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        def open_request(request, **_kwargs):
+            value = request.get_header("Range")
+            ranges.append(value)
+            self.assertEqual(request.get_header("If-range"), '"stable"')
+            start, end = map(int, value.removeprefix("bytes=").split("-"))
+            return Response(start, end)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "model.safetensors"
+            part = target.with_suffix(target.suffix + ".part")
+            part.write_bytes(payload[:4])
+            digest = hashlib.sha256(payload).hexdigest()
+            part.with_suffix(part.suffix + ".json").write_text(json.dumps({
+                "url": url, "expected_size": len(payload),
+                "expected_sha256": digest, "validator": '"stable"',
+            }), encoding="utf-8")
+            control = {
+                "url": url, "target": target,
+                "item": {"size_bytes": len(payload), "sha256": digest},
+                "pause_event": threading.Event(), "status_var": mock.Mock(),
+            }
+            with (
+                mock.patch.object(main_gateway, "MODEL_DOWNLOAD_RANGE_CHUNK_BYTES", 4),
+                mock.patch.object(main_gateway, "_open_download_request", side_effect=open_request),
+            ):
+                app._download_model_file(control)
+
+            self.assertEqual(ranges, ["bytes=4-7", "bytes=8-9"])
+            self.assertEqual(target.read_bytes(), payload)
+            app._finish_model_download.assert_called_once_with(control)
+            app._fail_model_download.assert_not_called()
 
 
     def test_model_download_keeps_partial_when_fastest_source_fails_over(self):
@@ -187,6 +313,41 @@ class RuntimeMaintenanceTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"model")
             app._finish_model_download.assert_called_once_with(control)
             app._fail_model_download.assert_not_called()
+
+    def test_gated_model_switches_source_without_retrying_unauthorized_requests(self):
+        app = self._app()
+        app.after = lambda _delay, callback: callback()
+        app._set_model_download_status = mock.Mock()
+        app._finish_model_download = mock.Mock()
+        app._fail_model_download = mock.Mock()
+        mirror = "https://hf-mirror.com/org/model/resolve/main/model.safetensors"
+        official = "https://huggingface.co/org/model/resolve/main/model.safetensors"
+        calls = []
+
+        def reject(request, **_kwargs):
+            calls.append(request.full_url)
+            raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "model.safetensors"
+            control = {
+                "url": mirror, "urls": [mirror, official], "target": target,
+                "item": {"size_bytes": 5, "sha256": hashlib.sha256(b"model").hexdigest()},
+                "pause_event": threading.Event(), "status_var": mock.Mock(),
+            }
+            with (
+                mock.patch.object(main_gateway, "_rank_model_download_sources", return_value=[mirror, official]),
+                mock.patch.object(main_gateway, "_open_download_request", side_effect=reject),
+                mock.patch.object(main_gateway.time, "sleep") as sleep,
+            ):
+                app._download_model_file(control)
+
+            self.assertEqual(calls, [mirror, official])
+            sleep.assert_not_called()
+            self.assertFalse(target.exists())
+            app._finish_model_download.assert_not_called()
+            self.assertIn("HTTP 401", app._fail_model_download.call_args.args[1])
+            self.assertFalse(app._fail_model_download.call_args.kwargs["retryable"])
 
 
     def test_finished_model_download_triggers_one_model_status_recheck(self):

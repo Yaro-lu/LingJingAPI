@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import hashlib
+import threading
 from pathlib import Path
 from unittest import mock
 
@@ -128,6 +129,66 @@ class QuickRepairStartupTests(unittest.TestCase):
         app._quick_repair_state = {"dismissed": True, "pending_profile": "at_most_12gb"}
         app._offer_quick_repair(True, 16 * 1024)
         self.assertTrue(app._show_quick_repair_dialog.call_args.kwargs["auto_resume"])
+
+    def test_transient_model_failure_retries_automatically_with_same_control(self):
+        app = self._app()
+        control = {
+            "item": {"path": "diffusion_models/model.safetensors"},
+            "state": "failed", "status_text": "网络中断", "download_retryable": True,
+        }
+        run = {
+            "index": 0, "controls": [control], "current": control,
+            "phase": "models", "model_retries": {}, "cancelled": threading.Event(),
+        }
+        app._quick_repair_run = run
+        app._quick_repair_popup = {"status_var": mock.Mock(), "progress_var": mock.Mock()}
+        app._quick_repair_fail = mock.Mock()
+        app._start_model_download = mock.Mock(side_effect=lambda item: item.update(state="downloading"))
+        app.after = mock.Mock()
+
+        app._quick_repair_poll_model(run)
+        self.assertEqual(run["phase"], "retry-wait")
+        self.assertEqual(run["model_retries"][0], 1)
+        delay, callback = app.after.call_args.args
+        self.assertEqual(delay, 5000)
+        callback()
+        app._start_model_download.assert_called_once_with(control)
+        app._quick_repair_fail.assert_not_called()
+
+    def test_unauthorized_model_failure_stops_without_retry(self):
+        app = self._app()
+        control = {
+            "item": {"path": "diffusion_models/model.safetensors"},
+            "state": "failed", "status_text": "HTTP 401", "download_retryable": False,
+        }
+        run = {"index": 0, "controls": [control], "current": control, "phase": "models"}
+        app._quick_repair_run = run
+        app._quick_repair_popup = {"status_var": mock.Mock(), "progress_var": mock.Mock()}
+        app._quick_repair_fail = mock.Mock()
+        app.after = mock.Mock()
+
+        app._quick_repair_poll_model(run)
+        app.after.assert_not_called()
+        self.assertIn("HTTP 401", app._quick_repair_fail.call_args.args[0])
+
+    def test_transient_model_failure_stops_after_bounded_retries(self):
+        app = self._app()
+        control = {
+            "item": {"path": "diffusion_models/model.safetensors"},
+            "state": "failed", "status_text": "网络中断", "download_retryable": True,
+        }
+        run = {
+            "index": 0, "controls": [control], "current": control,
+            "phase": "models", "model_retries": {0: 2},
+        }
+        app._quick_repair_run = run
+        app._quick_repair_popup = {"status_var": mock.Mock(), "progress_var": mock.Mock()}
+        app._quick_repair_fail = mock.Mock()
+        app.after = mock.Mock()
+
+        app._quick_repair_poll_model(run)
+        app.after.assert_not_called()
+        app._quick_repair_fail.assert_called_once()
 
     def test_missing_runtime_hands_off_to_auto_restart_installer(self):
         app = self._app()
