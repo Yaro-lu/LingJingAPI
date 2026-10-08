@@ -64,11 +64,11 @@ class H3PortTests(unittest.TestCase):
                     prepare_mapped_graph(graph, manifest, {**body, 'width': 641, 'height': 384}, lambda *_: 'uploaded.png')
                 self.assertGreater(video_timing(graph)['duration'], 0)
 
-    def test_catalog_lists_two_h3_workflows_and_keeps_old_graph_in_archive(self):
+    def test_catalog_lists_two_h3_workflows_and_excludes_legacy_fixture(self):
         records = read_local_workflow_catalog(ROOT/'workflows')
         self.assertTrue(set(WORKFLOWS).issubset({w['id'] for w in records}))
         self.assertNotIn('video_minimax_h3_i2v', {w['id'] for w in records})
-        self.assertTrue((ROOT/'workflows-archive/2026-09-28-h3-replaced/video_minimax_h3_i2v/workflow.json').is_file())
+        self.assertTrue((ROOT/'tests/fixtures/h3_legacy/workflow.json').is_file())
 
 
 if __name__ == '__main__':

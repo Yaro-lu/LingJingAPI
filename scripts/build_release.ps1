@@ -523,11 +523,9 @@ try {
         'start.bat',
         'check-env.bat',
         'README.md',
-        'README_EN.md',
         'LICENSE',
         'THIRD_PARTY_NOTICES.md',
-        '开源许可说明.txt',
-        'docs\灵境造片厂使用教学.pdf',
+        'assets\灵境造片厂使用教学.pdf',
         'examples\灵境造片厂示例页.html',
         'requirements.lock',
         'requirements-runtime.lock',
@@ -574,7 +572,7 @@ try {
             Copy-RequiredFile -Source $source -Destination (Join-Path $StageRoot $rootFile)
         }
     }
-    foreach ($requiredNotice in @('LICENSE', 'THIRD_PARTY_NOTICES.md', '开源许可说明.txt')) {
+    foreach ($requiredNotice in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
         $source = Join-Path $SourceRoot $requiredNotice
         Copy-RequiredFile -Source $source -Destination (Join-Path $StageRoot $requiredNotice)
     }
@@ -585,15 +583,15 @@ try {
         }
     }
     Copy-RequiredFile `
-        -Source (Join-Path $SourceRoot 'docs\灵境造片厂使用教学.pdf') `
+        -Source (Join-Path $SourceRoot 'assets\灵境造片厂使用教学.pdf') `
         -Destination (Join-Path $StageRoot '灵境造片厂使用教学.pdf')
     Copy-RequiredFile `
         -Source (Join-Path $SourceRoot 'examples\灵境造片厂示例页.html') `
         -Destination (Join-Path $StageRoot '灵境造片厂示例页.html')
-    foreach ($screenshot in @('console.png', 'workflow-models.png', 'studio.png')) {
+    foreach ($screenshot in @('console.png', 'quick-repair.png', 'workflow-models.png', 'studio.png')) {
         Copy-RequiredFile `
-            -Source (Join-Path $SourceRoot "docs\images\2.0\$screenshot") `
-            -Destination (Join-Path $StageRoot "docs\images\2.0\$screenshot")
+            -Source (Join-Path $SourceRoot "assets\readme\$screenshot") `
+            -Destination (Join-Path $StageRoot "assets\readme\$screenshot")
     }
 
     $releaseInfo = [ordered]@{
@@ -638,7 +636,6 @@ try {
         'README.md',
         'LICENSE',
         'THIRD_PARTY_NOTICES.md',
-        '开源许可说明.txt',
         '灵境造片厂使用教学.pdf',
         '灵境造片厂示例页.html',
         'requirements.lock',

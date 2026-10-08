@@ -28,7 +28,7 @@ from reportlab.platypus import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = ROOT / "docs" / "灵境造片厂使用教学.pdf"
+DEFAULT_OUTPUT = ROOT / "assets" / "灵境造片厂使用教学.pdf"
 CLIENT_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
 RUNTIME_RELEASE = json.loads(
     (ROOT / "app" / "runtime_release.json").read_text(encoding="utf-8-sig")

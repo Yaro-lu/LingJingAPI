@@ -16,9 +16,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
             encoding="utf-8-sig"
         )
         cls.readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")
-        cls.readme_en = (ROOT / "README_EN.md").read_text(encoding="utf-8-sig")
         cls.license_path = ROOT / "LICENSE"
-        cls.open_source_notice_path = ROOT / "开源许可说明.txt"
         cls.version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         cls.runtime_script = (ROOT / "scripts" / "build_runtime_release.ps1").read_text(
             encoding="utf-8-sig"
@@ -26,7 +24,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
         cls.runtime_release = json.loads(
             (ROOT / "app" / "runtime_release.json").read_text(encoding="utf-8-sig")
         )
-        cls.guide_path = ROOT / "docs" / "灵境造片厂使用教学.pdf"
+        cls.guide_path = ROOT / "assets" / "灵境造片厂使用教学.pdf"
         cls.example_path = ROOT / "examples" / "灵境造片厂示例页.html"
 
     def test_release_does_not_copy_the_heavy_ai_environment(self):
@@ -164,7 +162,8 @@ class LightweightReleaseContractTests(unittest.TestCase):
     def test_readme_omits_download_links_and_matches_current_version(self):
         self.assertNotIn("releases/download/", self.readme)
         self.assertIn(f"当前版本为 `{self.version}`", self.readme)
-        self.assertIn(f"Version `{self.version}`", self.readme_en)
+        self.assertIn(f"Version `{self.version}`", self.readme)
+        self.assertFalse((ROOT / "README_EN.md").exists())
 
     def test_project_declares_apache_2_and_stages_the_license(self):
         self.assertTrue(self.license_path.is_file())
@@ -175,7 +174,6 @@ class LightweightReleaseContractTests(unittest.TestCase):
         for notice_name in (
             "LICENSE",
             "THIRD_PARTY_NOTICES.md",
-            "开源许可说明.txt",
         ):
             with self.subTest(notice_name=notice_name):
                 self.assertGreaterEqual(
@@ -184,15 +182,9 @@ class LightweightReleaseContractTests(unittest.TestCase):
                     "License notices must be required inputs, copied, and verified",
                 )
 
-        for readme in (self.readme, self.readme_en):
-            with self.subTest(readme=readme[:20]):
-                self.assertIn("Apache License 2.0", readme)
+        self.assertIn("Apache License 2.0", self.readme)
 
         self.assertNotIn("仅可用于学习、测试与评估", self.readme)
-        self.assertTrue(self.open_source_notice_path.is_file())
-        notice = self.open_source_notice_path.read_text(encoding="utf-8-sig")
-        self.assertIn("由项目作者拥有版权并有权授权", notice)
-        self.assertIn("第三方组件、外部工作流、模型和素材", notice)
         self.assertFalse((ROOT / "公开非商业版本说明.txt").exists())
 
     def test_runtime_builder_supports_external_source_and_emits_release_manifest(self):
@@ -230,7 +222,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertTrue(self.guide_path.is_file())
         self.assertGreater(self.guide_path.stat().st_size, 10_000)
         self.assertEqual(self.guide_path.read_bytes()[:5], b"%PDF-")
-        self.assertIn("docs\\灵境造片厂使用教学.pdf", self.release_script)
+        self.assertIn("assets\\灵境造片厂使用教学.pdf", self.release_script)
         self.assertIn("灵境造片厂使用教学.pdf", self.release_script)
 
     def test_readme_describes_manual_download_and_installed_tutorial(self):

@@ -1,4 +1,4 @@
-[简体中文](README.md) | [English](README_EN.md)
+[简体中文](#灵境--lingjingapi) | [English](#english)
 
 # 灵境 · LingJingAPI
 
@@ -26,7 +26,7 @@
 
 FLUX.2 Klein 9B 的公开下载地址不改变其[非商业使用许可](https://help.bfl.ai/articles/9272590838-self-serve-dev-license-overview-pricing)；商用需取得模型方授权。
 
-![首次安装时的环境安装与修复界面](https://raw.githubusercontent.com/Yaro-lu/LingJingAPI/main/docs/images/2.0/quick-repair.png)
+![首次安装时的环境安装与修复界面](assets/readme/quick-repair.png)
 
 *截图摄于 2.0.3；2.0.4 已移除背景中的旧模式标识和平台登录入口，环境修复流程相同。*
 
@@ -46,13 +46,13 @@ FLUX.2 Klein 9B 的公开下载地址不改变其[非商业使用许可](https:/
 
 电脑和手机通过客户端页面提交任务、查看作品。
 
-![客户端创作页面](https://github.com/Yaro-lu/LingJingAPI/blob/main/docs/images/2.0/studio.png?raw=true)
+![客户端创作页面](assets/readme/studio.png)
 
 算力端提供连接地址，并集中管理工作流、模型与运行环境。
 
-![算力端控制台](https://github.com/Yaro-lu/LingJingAPI/blob/main/docs/images/2.0/console.png?raw=true)
+![算力端控制台](assets/readme/console.png)
 
-![工作流与模型管理](https://github.com/Yaro-lu/LingJingAPI/blob/main/docs/images/2.0/workflow-models.png?raw=true)
+![工作流与模型管理](assets/readme/workflow-models.png)
 
 *后两张为界面演示，连接信息和状态数值为演示数据。*
 
@@ -60,4 +60,38 @@ FLUX.2 Klein 9B 的公开下载地址不改变其[非商业使用许可](https:/
 
 当前发行包适用于 **Windows x64 算力端 + NVIDIA 显卡**，配套 CUDA 13 环境；电脑和手机可通过浏览器调用。服务端一键修复拉取失败时，可手动导入环境包。安装目录附带使用教学 PDF。
 
-[详细使用与接口说明](docs/使用与接口说明.md) · [Apache License 2.0](LICENSE)
+[Apache License 2.0](LICENSE) · [第三方许可声明](THIRD_PARTY_NOTICES.md)
+
+### 接口调用
+
+创作页右侧的“接口文档”会根据当前工作流展示参数和上传字段；第三方调用应以该页面及接口返回的 schema 为准。所有生成入口共用按提交时间排序的任务队列。
+
+```bash
+curl "https://your-server.example/v1/workflows?summary=true&available_only=true" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+curl "https://your-server.example/v1/workflows/WORKFLOW_ID/schema" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+curl -X POST "https://your-server.example/v1/workflows/run/WORKFLOW_ID" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"一只在窗边晒太阳的猫"}'
+```
+
+提交后可用 `GET /v1/tasks/{task_id}` 查询任务，使用 `GET /v1/tasks/queue` 查看排队位置，使用 `POST /v1/tasks/{task_id}/cancel` 取消任务。生成文件可通过结果中的文件地址获取。公网访问应使用 HTTPS，并妥善保管生成 API Key；本机管理 Key 不应提供给调用方。
+
+工作流位于 `workflows/<名称>/`，模型可放在 `models/` 或在客户端映射到其他位置。卸载程序不会递归删除模型、作品、运行环境或用户配置。
+
+## English
+
+**One-click access to compute power. Simple to use.**
+
+Deploy LingJingAPI on a Windows x64 machine with an NVIDIA GPU, then generate text, images, and video from a computer or phone using its URL and API Key. This works with rented remote compute or one shared office GPU machine. No platform account is required.
+
+Version `2.0.7`: download the installer from [Releases](https://github.com/Yaro-lu/LingJingAPI/releases). The program and runtime are distributed separately; the installer **does not include model weights**.
+
+1. Launch the program. The repair window appears if the runtime or Qwen3.5 text model is missing. Missing image or video models alone do not trigger it; manage them in “Models & Environment”.
+2. Use one-click repair. The program selects a profile based on whether VRAM is above 12 GB. It downloads and verifies the runtime and selected text, image, and video models; existing files are reused.
+3. Copy the local, LAN, or public URL and the generation API Key from the control panel. Keep the Key private.
+4. Open the URL in a browser, enter the Key, select an available workflow, and submit a prompt or reference image. API clients can inspect the workflow schema and task endpoints shown above.
+
+The FLUX.2 Klein 9B public download link does not change its [non-commercial license](https://help.bfl.ai/articles/9272590838-self-serve-dev-license-overview-pricing); commercial use requires authorization from the model provider. The source code is offered under [Apache License 2.0](LICENSE), while third-party components retain their [own licenses](THIRD_PARTY_NOTICES.md).
