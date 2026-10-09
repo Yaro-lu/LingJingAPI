@@ -89,6 +89,33 @@ class WorkflowManagementTests(unittest.TestCase):
                 self.assertEqual(json.loads((folder / "workflow.json").read_text(encoding="utf-8")), VALID_WORKFLOW)
                 self.assertTrue((folder / "frontend_workflow.json").exists())
 
+    def test_bundled_replacement_upgrades_only_previous_pending_entry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            folder = base / "workflows" / "flux"
+            folder.mkdir(parents=True)
+            manifest = {
+                "id": "flux", "name": "Old", "type": "unknown", "enabled": False,
+                "api_mapping_status": "pending_conversion", "description": "等待修复",
+            }
+            (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            config = base / "runtime" / "workflow_config.json"
+            registry = WorkflowRegistry(config, base / "workflows")
+            self.assertFalse(registry.get("flux").enabled)
+            replacement = {
+                "id": "flux", "name": "New", "type": "image.image_to_image",
+                "enabled": True, "replaces_pending_conversion": True,
+                "description": "新的轻量版本",
+            }
+            (folder / "manifest.json").write_text(json.dumps(replacement), encoding="utf-8")
+            (folder / "workflow.json").write_text(json.dumps(VALID_WORKFLOW), encoding="utf-8")
+            registry.scan_folder()
+            self.assertTrue(registry.get("flux").enabled)
+            self.assertEqual(registry.get("flux").description, "新的轻量版本")
+            registry.set_enabled("flux", False)
+            registry.scan_folder()
+            self.assertFalse(registry.get("flux").enabled)
+
     def test_install_registers_workflow_and_preserves_existing_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)

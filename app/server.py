@@ -1,5 +1,5 @@
 """
-Local AI API Gateway — API 服务器
+LingJingAPI — API 服务器
 
 集成 FastAPI + Bearer 鉴权 + Cloudflare Quick Tunnel
 端点：
@@ -24,9 +24,11 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from typing import Optional
 import mimetypes
+import ipaddress
+import socket
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -57,6 +59,7 @@ from app.core.h3_dimensions import h3_dimensions, reference_field
 from app.workflow_registry import WorkflowRegistry  # noqa: E402
 from app.tunnel.cloudflared_manager import CloudflaredManager  # noqa: E402
 from app.engines.comfyui_client import ComfyUIClient  # noqa: E402
+from app.core.external_providers import ProviderSettings, ProviderError, execute_provider  # noqa: E402
 
 # ── 全局 ──────────────────────────────────────────────
 config: Optional[Config] = None
@@ -486,6 +489,57 @@ def _workflow_payload(w) -> dict:
         "api_mapping_error": mapping_error,
     }
 
+
+_CLOUD_WORKFLOWS = {
+    "cloud_deepseek": ("deepseek", "text", "DeepSeek 文字"),
+    "cloud_seedream": ("seedream", "image", "火山 Seedream 图片"),
+    "cloud_seedance": ("seedance", "video", "火山 Seedance 视频"),
+    "cloud_dreamina_image": ("dreamina", "image", "即梦 CLI 图片"),
+    "cloud_dreamina_video": ("dreamina", "video", "即梦 CLI 视频"),
+}
+
+
+def _cloud_workflow_payloads(runtime_dir: Path) -> list[dict]:
+    profiles = ProviderSettings(runtime_dir).list_profiles()
+    result = []
+    for workflow_id, (provider_id, kind, name) in _CLOUD_WORKFLOWS.items():
+        profile = profiles[provider_id]
+        fields = [{"name": "prompt", "type": "text", "label": "提示词", "required": True}]
+        optional = []
+        if provider_id == "deepseek":
+            optional = ["system_prompt"]
+        elif provider_id == "seedream":
+            optional = ["size", "image", "seed", "watermark"]
+        elif kind == "image":
+            optional = ["image", "ratio", "resolution_type"]
+        elif kind == "video":
+            optional = ["duration", "ratio", "resolution", "image", "start_image", "end_image"]
+            if provider_id == "seedance":
+                optional.append("seed")
+        if provider_id == "dreamina":
+            optional.append("model_version")
+        labels = {"system_prompt": "系统提示词", "size": "图片尺寸", "image": "参考图片",
+                  "seed": "随机种子", "watermark": "添加水印", "ratio": "画面比例",
+                  "resolution_type": "图片清晰度", "duration": "时长（秒）",
+                  "resolution": "视频分辨率", "start_image": "首帧图片",
+                  "end_image": "尾帧图片", "model_version": "模型版本"}
+        for key in optional:
+            field_type = ("image" if "image" in key else "integer" if key in {"duration", "seed"}
+                          else "boolean" if key == "watermark" else "text")
+            fields.append({"name": key, "type": field_type, "label": labels[key], "required": False})
+        result.append({
+            "id": workflow_id, "name": name, "description": "第三方模型；使用本机保存的凭据调用",
+            "type": {"text": "text_chat", "image": "image_t2i", "video": "video_t2v"}[kind],
+            "output_type": kind, "available": profile.configured,
+            "validation_status": "ready" if profile.configured else "provider_not_configured",
+            "api_mapping_status": "ready" if profile.configured else "provider_not_configured",
+            "api_mapping_error": "" if profile.configured else "请在模型与环境中配置此第三方模型",
+            "input_schema": {"required": ["prompt"], "optional": optional, "inputs": fields,
+                             "response": {"type": kind, "format": "url"}},
+            "provider_id": provider_id,
+        })
+    return result
+
 def _model_group_for_type(model_type: str) -> str:
     text = (model_type or "").lower()
     if "video" in text or "flf2v" in text:
@@ -639,6 +693,86 @@ def _with_output_urls(task_id: str, outputs: list) -> list:
             "download_path": download_path,
         })
     return normalized
+
+
+def _store_provider_outputs(task_id: str, outputs: list[dict], cancel_event: threading.Event) -> list[dict]:
+    """Keep provider media under the same protected output route as local jobs."""
+    saved = []
+    for index, item in enumerate(outputs):
+        if cancel_event.is_set():
+            return []
+        if item.get("type") == "text":
+            saved.append({"type": "text", "text": str(item.get("text") or "")})
+            continue
+        url = str(item.get("external_url") or "")
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ProviderError("第三方返回了不安全的结果地址", "unsafe_result_url")
+        try:
+            addresses = socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)
+            if not addresses or any(not ipaddress.ip_address(address[4][0]).is_global for address in addresses):
+                raise ProviderError("第三方结果地址指向内网", "unsafe_result_url")
+        except socket.gaierror as exc:
+            raise ProviderError("无法解析第三方结果地址", "result_dns") from exc
+        kind = "video" if item.get("type") == "video" else "image"
+        extension = ".mp4" if kind == "video" else ".png"
+        path = _outputs_dir() / task_id / f"external-{index + 1}{extension}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".part")
+        max_bytes = 1024 * 1024 * 1024 if kind == "video" else 100 * 1024 * 1024
+        try:
+            import requests
+            with requests.get(url, timeout=(10, 60), stream=True, allow_redirects=False) as response:
+                if response.status_code != 200:
+                    raise ProviderError(f"下载第三方结果失败（HTTP {response.status_code}）", "result_download")
+                content_type = response.headers.get("Content-Type", "").lower()
+                if kind == "image" and not (content_type.startswith("image/") or content_type.startswith("application/octet-stream")):
+                    raise ProviderError("第三方返回内容不是图片", "result_type")
+                if kind == "video" and not (content_type.startswith("video/") or content_type.startswith("application/octet-stream")):
+                    raise ProviderError("第三方返回内容不是视频", "result_type")
+                if kind == "image":
+                    extension = {"image/jpeg": ".jpg", "image/webp": ".webp"}.get(content_type.split(";")[0], ".png")
+                    path = path.with_suffix(extension)
+                    temporary = path.with_suffix(path.suffix + ".part")
+                total = 0
+                signature = b""
+                with temporary.open("wb") as handle:
+                    for chunk in response.iter_content(1024 * 1024):
+                        if cancel_event.is_set():
+                            return []
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ProviderError("第三方结果文件过大", "result_too_large")
+                        if len(signature) < 16:
+                            signature += chunk[:16 - len(signature)]
+                        handle.write(chunk)
+                if total == 0:
+                    raise ProviderError("第三方结果文件为空", "result_empty")
+                if kind == "image":
+                    if signature.startswith(b"\xff\xd8\xff"):
+                        extension = ".jpg"
+                    elif signature.startswith(b"\x89PNG\r\n\x1a\n"):
+                        extension = ".png"
+                    elif signature[:4] == b"RIFF" and signature[8:12] == b"WEBP":
+                        extension = ".webp"
+                    else:
+                        raise ProviderError("第三方图片格式无法识别", "result_type")
+                elif signature[4:8] == b"ftyp":
+                    extension = ".mp4"
+                elif signature.startswith(b"\x1a\x45\xdf\xa3"):
+                    extension = ".webm"
+                else:
+                    raise ProviderError("第三方视频格式无法识别", "result_type")
+                path = path.with_suffix(extension)
+            temporary.replace(path)
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError("第三方结果保存失败", "result_download") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+        saved.append({"type": kind, "filename": path.name, "subfolder": task_id})
+    return saved
 
 
 def _read_text_output_file(task_id: str, item: dict) -> str:
@@ -1250,6 +1384,9 @@ class AuthMiddleware:
         if path in PUBLIC_PATHS:
             await self.app(scope, receive, send)
             return
+        if path == "/icon.png" and scope.get("method") in {"GET", "HEAD"}:
+            await self.app(scope, receive, send)
+            return
         if path == "/":
             await self.app(scope, receive, send)
             return
@@ -1349,7 +1486,7 @@ def create_app() -> FastAPI:
             if state is not None:
                 state.set_offline()
 
-    app = FastAPI(title="Local AI API Gateway", version=APP_VERSION, lifespan=lifespan)
+    app = FastAPI(title="LingJingAPI", version=APP_VERSION, lifespan=lifespan)
     app.add_middleware(AuthMiddleware)
     app.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
     app.add_middleware(SecurityHeadersMiddleware)
@@ -1553,12 +1690,89 @@ def create_app() -> FastAPI:
     def _run_pending_task(job: dict):
         task_id = job["task_id"]
         try:
-            _start_workflow_task(job["workflow_id"], job["body"], reserved_task_id=task_id)
+            if job.get("provider_id"):
+                _start_provider_task(job["provider_id"], job["body"], reserved_task_id=task_id)
+            else:
+                _start_workflow_task(job["workflow_id"], job["body"], reserved_task_id=task_id)
         except Exception as exc:
             print(f"[API] queued task {task_id} failed ({type(exc).__name__}): {exc}")
             detail = exc.detail if isinstance(exc, HTTPException) else "任务提交失败，请查看本地日志"
             _set_task_record(task_id, {"status": "failed", "phase": "提交失败", "error": str(detail)})
             _advance_queue(task_id)
+
+    def _start_provider_task(provider_id: str, body: dict, *, reserved_task_id: str = "") -> dict:
+        nonlocal active_task_id
+        if not isinstance(body, dict):
+            raise HTTPException(422, detail="请求必须是 JSON 对象")
+        profile = ProviderSettings(config.runtime_dir).get(provider_id)
+        if not profile.configured:
+            raise HTTPException(409, detail=f"{profile.name} 尚未在模型管理中完成配置")
+        prompt = str(body.get("prompt") or "").strip()
+        if not prompt or len(prompt) > MAX_PROMPT_CHARS:
+            raise HTTPException(422, detail="请填写有效提示词")
+        task_id = reserved_task_id or f"task_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+        reservation = {
+            "id": task_id, "task_id": task_id,
+            "workflow_id": f"provider_{provider_id}", "workflow_name": profile.name,
+            "prompt_summary": _clean_task_text(prompt, 220),
+            "title": _task_title_from_body(body, provider_id),
+            "status": "reserving", "phase": "正在提交", "progress_label": "正在提交",
+            "progress_percent": 0, "queue_position": 0, "started_at_ts": time.time(),
+            "outputs": [],
+        }
+        if not reserved_task_id:
+            with _task_lock:
+                if active_task_id:
+                    if len(pending_jobs) >= max(1, int(getattr(config, "max_pending", 10))):
+                        raise HTTPException(429, detail="任务队列已满，请稍后重试")
+                    reservation.update(status="pending", phase="排队中", progress_label="排队中",
+                                       queue_position=len(pending_jobs) + 1)
+                    pending_jobs.append({"task_id": task_id, "provider_id": provider_id, "body": body})
+                    cancel_events[task_id] = threading.Event()
+                    task_records[task_id] = dict(reservation)
+                    _prune_task_records_locked()
+                    return _task_api_response(reservation)
+                active_task_id = task_id
+                cancel_events[task_id] = threading.Event()
+                current_task.clear()
+                current_task.update(reservation)
+                task_records[task_id] = dict(reservation)
+                _prune_task_records_locked()
+        cancel_event = cancel_events.setdefault(task_id, threading.Event())
+
+        def run():
+            try:
+                _set_task_record(task_id, {"status": "running", "phase": "第三方生成中",
+                                           "progress_label": "第三方生成中", "progress_percent": 10})
+                outputs = execute_provider(profile, body, config.runtime_dir, cancel_event)
+                if cancel_event.is_set():
+                    return
+                _set_task_record(task_id, {"phase": "保存结果", "progress_label": "保存结果", "progress_percent": 85})
+                saved = _store_provider_outputs(task_id, outputs, cancel_event)
+                if not cancel_event.is_set():
+                    _set_task_record(task_id, {"status": "completed", "outputs": saved,
+                                               "phase": "已完成", "progress_label": "已完成", "progress_percent": 100})
+            except ProviderError as exc:
+                if not cancel_event.is_set():
+                    _set_task_record(task_id, {"status": "failed", "phase": "执行失败", "error": str(exc)})
+            except Exception as exc:
+                print(f"[API] provider {provider_id} task failed ({type(exc).__name__}): {exc}")
+                if not cancel_event.is_set():
+                    _set_task_record(task_id, {"status": "failed", "phase": "执行失败", "error": "第三方任务失败，请查看本地日志"})
+            finally:
+                with _task_lock:
+                    finished_status = task_records.get(task_id, {}).get("status")
+                if finished_status != "completed":
+                    for file_path in (_outputs_dir() / task_id).glob("external-*"):
+                        try:
+                            if file_path.is_file():
+                                file_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                _advance_queue(task_id)
+
+        threading.Thread(target=run, daemon=True).start()
+        return _task_api_response(reservation)
 
     def _start_workflow_task(workflow_id: Optional[str], body: dict, *, reserved_task_id: str = "") -> dict:
         nonlocal active_task_id
@@ -1876,10 +2090,11 @@ def create_app() -> FastAPI:
     async def client_page():
         # Releases place the standalone page at the installation root;
         # source checkouts keep it in examples/.
-        page = BASE_DIR / "灵境造片厂示例页.html"
-        if not page.is_file():
-            page = BASE_DIR / "examples" / "灵境造片厂示例页.html"
-        if not page.is_file():
+        pages = [directory / name
+                 for name in ("LingJingAPI示例页.html", "灵境造片厂示例页.html")
+                 for directory in (BASE_DIR, BASE_DIR / "examples")]
+        page = next((candidate for candidate in pages if candidate.is_file()), None)
+        if page is None:
             raise HTTPException(status_code=404, detail="客户端页面文件不存在")
         content = page.read_text(encoding="utf-8")
         # Only the served copy uses its own origin; the standalone file stays unchanged.
@@ -1888,6 +2103,13 @@ def create_app() -> FastAPI:
             'window.location.origin',
         )
         return HTMLResponse(content)
+
+    @app.api_route("/icon.png", methods=["GET", "HEAD"], include_in_schema=False)
+    async def client_icon():
+        icon = BASE_DIR / "icon.png"
+        if not icon.is_file():
+            raise HTTPException(status_code=404, detail="程序图标不存在")
+        return FileResponse(str(icon), media_type="image/png")
 
     @app.get("/health")
     @app.get("/healthz")
@@ -1995,6 +2217,10 @@ def create_app() -> FastAPI:
     @app.get("/v1/models")
     async def list_models():
         models = _models_from_workflows()
+        for item in _cloud_workflow_payloads(config.runtime_dir):
+            models.append({"id": item["id"], "name": item["name"], "label": item["name"],
+                           "workflow_id": item["id"], "type": item["type"],
+                           "group": item["output_type"], "available": item["available"]})
         return {
             "models": models,
             "data": models,
@@ -2007,18 +2233,27 @@ def create_app() -> FastAPI:
     @app.get("/v1/workflows/list")
     async def list_workflows(summary: bool = False, available_only: bool = False):
         workflows = registry.workflows
+        cloud = _cloud_workflow_payloads(config.runtime_dir)
+        if available_only:
+            cloud = [item for item in cloud if item["available"]]
         if available_only:
             payloads = await asyncio.to_thread(lambda: [_workflow_payload(w) for w in workflows])
             workflows = [w for w, payload in zip(workflows, payloads) if payload.get("available")]
         if summary:
-            return {"workflows": [{"id": w.id, "name": w.name} for w in workflows], "gateway_id": gateway_id(config.runtime_dir), "lan_urls": lan_urls(config.server_port)}
+            return {"workflows": [{"id": w.id, "name": w.name} for w in workflows]
+                    + [{"id": item["id"], "name": item["name"]} for item in cloud],
+                    "gateway_id": gateway_id(config.runtime_dir), "lan_urls": lan_urls(config.server_port)}
         return {
-            "workflows": [_workflow_payload(w) for w in workflows],
+            "workflows": [_workflow_payload(w) for w in workflows] + cloud,
             "default_workflow": registry.default_workflow_id,
         }
 
     @app.get("/v1/workflows/{workflow_id}/schema")
     async def workflow_schema(workflow_id: str):
+        cloud = next((item for item in _cloud_workflow_payloads(config.runtime_dir)
+                      if item["id"] == workflow_id), None)
+        if cloud:
+            return cloud
         workflow = next((w for w in registry.workflows if w.id == workflow_id), None)
         if workflow is None:
             raise HTTPException(404, detail="工作流不存在，请刷新列表")
@@ -2051,7 +2286,13 @@ def create_app() -> FastAPI:
             body = await request.json()
         except Exception:
             body = {}
-        task_info = await asyncio.to_thread(_start_workflow_task, workflow_id, body)
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=422, detail="请求内容必须是 JSON 对象")
+        if workflow_id in _CLOUD_WORKFLOWS:
+            provider_id, kind, _name = _CLOUD_WORKFLOWS[workflow_id]
+            task_info = await asyncio.to_thread(_start_provider_task, provider_id, {**body, "kind": kind})
+        else:
+            task_info = await asyncio.to_thread(_start_workflow_task, workflow_id, body)
         status_path = f"/v1/tasks/{quote(task_info['task_id'], safe='')}"
         return {
             "id": task_info["task_id"],
@@ -2066,6 +2307,24 @@ def create_app() -> FastAPI:
             "status_url": f"{_public_base_url()}{status_path}",
             "message": f"任务已提交，通过 /v1/tasks/{task_info['task_id']} 查询进度",
         }
+
+    @app.get("/v1/providers")
+    async def list_provider_status():
+        return {"providers": [item.public_status() for item in
+                ProviderSettings(config.runtime_dir).list_profiles().values()]}
+
+    @app.post("/v1/providers/{provider_id}/run")
+    async def run_provider(provider_id: str, request: Request):
+        if provider_id not in {"deepseek", "seedream", "seedance", "dreamina"}:
+            raise HTTPException(404, detail="未知第三方模型")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        task_info = await asyncio.to_thread(_start_provider_task, provider_id, body)
+        return {"task_id": task_info["task_id"], "status": _submission_status(task_info),
+                "queue_position": task_info.get("queue_position", 0),
+                "status_path": f"/v1/tasks/{quote(task_info['task_id'], safe='')}"}
 
     def _resolve_short_workflow(workflow_alias: Optional[str]):
         requested = str(workflow_alias or "").strip()
@@ -2223,6 +2482,22 @@ def create_app() -> FastAPI:
                     "message": "prompt or messages is required",
                 }
             })
+
+        requested_model = str(body.get("model") or "").casefold()
+        deepseek_profile = ProviderSettings(config.runtime_dir).get("deepseek")
+        if requested_model in {"deepseek", "cloud_deepseek"} or (
+            deepseek_profile.configured and requested_model == deepseek_profile.model_id.casefold()
+        ):
+            submitted = await asyncio.to_thread(_start_provider_task, "deepseek",
+                                                {"prompt": prompt, "messages": body.get("messages"),
+                                                 "system_prompt": body.get("system_prompt"),
+                                                 "response_format": body.get("response_format")})
+            completed = await asyncio.to_thread(_wait_for_task, submitted["task_id"], 600)
+            content = _task_text_output(completed)
+            return {"id": submitted["task_id"], "object": "chat.completion",
+                    "created": int(time.time()), "model": body.get("model"),
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content},
+                                 "finish_reason": "stop"}], "task_id": submitted["task_id"]}
 
         workflow_id = _text_workflow_id_from_model(body.get("model") or "")
         if not workflow_id:
@@ -2386,6 +2661,30 @@ def create_app() -> FastAPI:
             save_record(config.runtime_dir, record)
         return {"deleted": True, "task_id": task_id, "filename": filename}
 
+    @app.post("/v1/videos/generations")
+    async def external_video_generation(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            raise HTTPException(422, detail="请求必须是 JSON 对象")
+        model = str(body.get("model") or "").casefold()
+        seedance = ProviderSettings(config.runtime_dir).get("seedance")
+        if model in {"seedance", "cloud_seedance"} or (
+            seedance.configured and model == seedance.model_id.casefold()
+        ):
+            provider_id = "seedance"
+        elif model in {"dreamina", "cloud_dreamina_video"}:
+            provider_id = "dreamina"
+        else:
+            raise HTTPException(404, detail="没有匹配的第三方视频模型")
+        submitted = await asyncio.to_thread(_start_provider_task, provider_id, {**body, "kind": "video"})
+        status_path = f"/v1/tasks/{quote(submitted['task_id'], safe='')}"
+        return JSONResponse(status_code=202, headers={"Location": status_path, "Retry-After": "3"},
+                            content={"task_id": submitted["task_id"], "status": _submission_status(submitted),
+                                     "queue_position": submitted.get("queue_position", 0), "status_path": status_path})
+
     @app.post("/api/v3/images/generations")
     async def ark_compatible_image_generation(request: Request):
         try:
@@ -2418,6 +2717,24 @@ def create_app() -> FastAPI:
                     "message": "Only response_format=url is supported.",
                 }
             })
+
+        cloud_model = str(body.get("model") or "").casefold()
+        seedream_profile = ProviderSettings(config.runtime_dir).get("seedream")
+        is_seedream_model = seedream_profile.configured and cloud_model == seedream_profile.model_id.casefold()
+        if cloud_model in {"seedream", "cloud_seedream", "dreamina", "cloud_dreamina_image"} or is_seedream_model:
+            provider_id = "seedream" if "seedream" in cloud_model or is_seedream_model else "dreamina"
+            submitted = await asyncio.to_thread(_start_provider_task, provider_id, {**body, "kind": "image"})
+            if _prefers_async_image_response(body, request.headers.get("prefer", "")):
+                status_path = f"/v1/tasks/{quote(submitted['task_id'], safe='')}"
+                return JSONResponse(status_code=202,
+                                    headers={"Location": status_path, "Retry-After": "3"},
+                                    content=_image_task_submission_payload(submitted, cloud_model))
+            completed = await asyncio.to_thread(_wait_for_task, submitted["task_id"], 1800)
+            outputs = completed.get("outputs") or []
+            if not outputs:
+                raise HTTPException(502, detail="第三方图片任务没有输出")
+            return {"created": int(time.time()), "data": [{"url": item["url"]} for item in outputs],
+                    "model": cloud_model, "task_id": submitted["task_id"]}
 
         workflow_id = _image_workflow_from_model(body.get("model") or "flux_t2i_v1")
         width, height = _size_to_dimensions(body)

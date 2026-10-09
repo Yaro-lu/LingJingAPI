@@ -12,7 +12,7 @@ class LightweightReleaseContractTests(unittest.TestCase):
         cls.release_script = (ROOT / "scripts" / "build_release.ps1").read_text(
             encoding="utf-8-sig"
         )
-        cls.installer_script = (ROOT / "installer" / "LingJing.iss").read_text(
+        cls.installer_script = (ROOT / "installer" / "LingJingAPI.iss").read_text(
             encoding="utf-8-sig"
         )
         cls.readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")
@@ -24,8 +24,8 @@ class LightweightReleaseContractTests(unittest.TestCase):
         cls.runtime_release = json.loads(
             (ROOT / "app" / "runtime_release.json").read_text(encoding="utf-8-sig")
         )
-        cls.guide_path = ROOT / "assets" / "灵境造片厂使用教学.pdf"
-        cls.example_path = ROOT / "examples" / "灵境造片厂示例页.html"
+        cls.guide_path = ROOT / "assets" / "LingJingAPI使用教学.pdf"
+        cls.example_path = ROOT / "examples" / "LingJingAPI示例页.html"
 
     def test_release_does_not_copy_the_heavy_ai_environment(self):
         forbidden_copy_commands = (
@@ -211,7 +211,11 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertTrue(self.runtime_release["download_url"].endswith(f"/{package_name}"))
 
     def test_installer_creates_a_branded_root_launcher(self):
-        self.assertIn('#define MyAppName "灵境 · LingJingAPI"', self.installer_script)
+        self.assertIn('#define MyAppName "LingJingAPI"', self.installer_script)
+        self.assertIn('DefaultDirName={localappdata}\\Programs\\LingJingAPI', self.installer_script)
+        self.assertIn('AppId={{8587F9B2-C36E-49A6-942C-DC321E26510E}', self.installer_script)
+        self.assertIn('UsePreviousAppDir=yes', self.installer_script)
+        self.assertIn('UsePreviousGroup=no', self.installer_script)
         self.assertIn('Name: "{app}\\{#MyAppName}"', self.installer_script)
         self.assertIn(
             'IconFilename: "{app}\\app\\gui\\assets\\app.ico"',
@@ -222,8 +226,8 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertTrue(self.guide_path.is_file())
         self.assertGreater(self.guide_path.stat().st_size, 10_000)
         self.assertEqual(self.guide_path.read_bytes()[:5], b"%PDF-")
-        self.assertIn("assets\\灵境造片厂使用教学.pdf", self.release_script)
-        self.assertIn("灵境造片厂使用教学.pdf", self.release_script)
+        self.assertIn("assets\\LingJingAPI使用教学.pdf", self.release_script)
+        self.assertIn("LingJingAPI使用教学.pdf", self.release_script)
 
     def test_readme_describes_manual_download_and_installed_tutorial(self):
         for marker in ("https://github.com/Yaro-lu/LingJingAPI", "一键修复", "拉取失败", "使用教学 PDF"):
@@ -232,8 +236,8 @@ class LightweightReleaseContractTests(unittest.TestCase):
 
     def test_release_stages_local_example_page_at_install_root(self):
         self.assertTrue(self.example_path.is_file())
-        self.assertIn("examples\\灵境造片厂示例页.html", self.release_script)
-        self.assertIn("灵境造片厂示例页.html", self.release_script)
+        self.assertIn("examples\\LingJingAPI示例页.html", self.release_script)
+        self.assertIn("LingJingAPI示例页.html", self.release_script)
 
     def test_installer_preserves_the_restored_14b_visual_workflow_on_upgrade(self):
         old_visual_workflow_delete = (
@@ -244,8 +248,8 @@ class LightweightReleaseContractTests(unittest.TestCase):
         self.assertNotIn(old_visual_workflow_delete, self.installer_script)
 
     def test_installer_creates_same_logo_desktop_example_shortcut(self):
-        self.assertIn('Name: "{autodesktop}\\灵境 · LingJingAPI 示例页"', self.installer_script)
-        self.assertIn('Filename: "{app}\\灵境造片厂示例页.html"', self.installer_script)
+        self.assertIn('Name: "{autodesktop}\\LingJingAPI 示例页"', self.installer_script)
+        self.assertIn('Filename: "{app}\\LingJingAPI示例页.html"', self.installer_script)
         self.assertIn(
             'IconFilename: "{app}\\app\\gui\\assets\\app.ico"',
             self.installer_script,

@@ -280,8 +280,8 @@ class DashboardShellTests(unittest.TestCase):
                 app.attributes("-alpha", 0.0)
                 app.update()
 
-                self.assertEqual(app.title(), "灵境")
-                self.assertIsNotNone(self._find_by_text(app._sidebar, "灵境"))
+                self.assertEqual(app.title(), "LingJingAPI")
+                self.assertIsNotNone(self._find_by_text(app._sidebar, "LingJingAPI"))
                 self.assertEqual(tuple(app._pages), ("overview", "settings"))
                 self.assertEqual(tuple(app._nav_buttons), PAGE_IDS)
                 self.assertGreaterEqual(
@@ -563,7 +563,7 @@ class DashboardShellTests(unittest.TestCase):
                 "models",
                 target.resolve(),
             )
-            self.assertIn("重新打开灵境 · LingJingAPI 后生效", showinfo.call_args.args[1])
+            self.assertIn("重新打开 LingJingAPI 后生效", showinfo.call_args.args[1])
 
     def test_comfyui_model_path_file_uses_the_configured_chinese_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

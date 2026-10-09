@@ -1,52 +1,52 @@
 {
-  "api_mapping_status": "pending_conversion",
-  "api_mapping_error": "ComfyUI 原生转换失败：缺少或无效节点：Joy_caption_two、CR Text、Text Concatenate (JPS)、GetNode、ImageResizeKJ、TTP_Tile_image_size、TTP_Image_Tile_Batch、easy imageBatchToImageList、GetNode、ImageListToImageBatch、TTP_Image_Assy、SetNode",
-  "output_type": "unknown",
-  "input_schema": {},
   "id": "flux",
-  "name": "Flux放大+高清修复工作流",
-  "type": "unknown",
+  "name": "FLUX.2 轻量高清修复",
+  "type": "image.image_to_image",
   "engine": "comfyui",
-  "enabled": false,
-  "version": "1.0.0",
-  "description": "原始工作流已保存，等待补齐依赖并完成转换",
-  "dependencies": {
-    "models": [],
-    "nodes": [
-      "Joy_caption_two",
-      "CR Text",
-      "Text Concatenate (JPS)",
-      "GetNode",
-      "ImageResizeKJ",
-      "ImageScaleToTotalPixels",
-      "TTP_Tile_image_size",
-      "TTP_Image_Tile_Batch",
-      "RandomNoise",
-      "KSamplerSelect",
-      "FluxGuidance",
-      "BasicGuider",
-      "SamplerCustomAdvanced",
-      "BasicScheduler",
-      "VAEDecodeTiled",
-      "easy imageBatchToImageList",
-      "VAEEncode",
-      "UNETLoader",
-      "ImageListToImageBatch",
-      "CLIPTextEncode",
-      "TTP_Image_Assy",
-      "SetNode",
-      "FloatConstant",
-      "Image Comparer (rgthree)",
-      "SaveImage",
-      "ShowText|pysssss",
-      "ImageUpscaleWithModel",
-      "PreviewImage",
-      "Joy_caption_two_load",
-      "UpscaleModelLoader",
-      "VAELoader",
-      "DualCLIPLoader",
-      "LoadImage",
-      "Note"
+  "version": "2.0.0",
+  "capability": "image_to_image",
+  "model_group": "Flux2 Klein 4B",
+  "enabled": true,
+  "replaces_pending_conversion": true,
+  "description": "用 FLUX.2 Klein 4B 重绘参考图细节，再以 Lanczos 放大 2 倍；适合 8 GB 显存。原始 FLUX.1 工作流保留在 frontend_workflow.json。",
+  "input_schema": {
+    "summary": "上传参考图片，填写希望保留或增强的细节；重绘后自动放大输出。",
+    "required": [
+      "image",
+      "prompt"
+    ],
+    "optional": [
+      "seed",
+      "steps"
+    ],
+    "inputs": [
+      {
+        "name": "image",
+        "type": "image",
+        "label": "待修复图片",
+        "required": true
+      },
+      {
+        "name": "prompt",
+        "type": "text",
+        "label": "修复要求",
+        "required": true,
+        "default": "Enhance fine details and sharpness while preserving the original composition, subject, colors, and identity."
+      },
+      {
+        "name": "seed",
+        "type": "integer",
+        "label": "随机种子",
+        "required": false
+      },
+      {
+        "name": "steps",
+        "type": "integer",
+        "label": "采样步数",
+        "required": false,
+        "minimum": 1,
+        "maximum": 20
+      }
     ]
   }
 }

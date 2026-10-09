@@ -103,7 +103,7 @@ $enginePid = 0
 $acknowledged = $false
 try {
     $definition = $service.NewTask(0)
-    $definition.RegistrationInfo.Description = 'LingJingAI runtime update handoff'
+    $definition.RegistrationInfo.Description = 'LingJingAPI runtime update handoff'
     $definition.Settings.Enabled = $true
     $definition.Settings.Hidden = $true
     $definition.Settings.AllowDemandStart = $true

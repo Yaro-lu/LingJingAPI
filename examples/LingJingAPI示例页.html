@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>灵境｜一键调用算力，简单好用。</title>
+  <title>LingJingAPI｜一键调用算力，简单好用。</title>
+  <link rel="icon" href="icon.png" type="image/png" onerror="this.onerror=null;this.href='../icon.png'">
   <style>
     :root {
       --ink: #f4f2ec;
@@ -771,9 +772,9 @@
   <main class="shell">
     <header class="masthead">
       <div class="brand">
-        <img src="icon.png" alt="灵境 · LingJingAPI Logo" onerror="this.onerror=null;this.src='../icon.png'">
+        <img src="icon.png" alt="LingJingAPI Logo" onerror="this.onerror=null;this.src='../icon.png'">
         <div>
-          <div class="brand-name">灵境</div>
+          <div class="brand-name">LingJingAPI</div>
           <div class="brand-sub">一键调用算力，简单好用。</div>
         </div>
       </div>
@@ -784,7 +785,7 @@
       <div>
         <div class="eyebrow">New user quick start</div>
         <h1 id="page-title">把 URL 和 Key<br>变成第一个<em>作品</em></h1>
-        <p class="intro-copy">一键调用算力，简单好用。这是随客户端安装的本地示例页。API Key 仅用于向你指定的客户端鉴权，无需额外部署网站。启动灵境 · LingJingAPI，复制 URL 和 API Key，连接后显示全部工作流名称，选择后加载参数。局域网不可达时请改用互联网 HTTPS URL。</p>
+        <p class="intro-copy">一键调用算力，简单好用。这是随客户端安装的本地示例页。API Key 仅用于向你指定的客户端鉴权，无需额外部署网站。启动 LingJingAPI，复制 URL 和 API Key，连接后显示全部工作流名称，选择后加载参数。局域网不可达时请改用互联网 HTTPS URL。</p>
       </div>
       <div class="quick-steps" aria-label="快速使用步骤">
         <div class="quick-step"><b>STEP 01</b><span>启动客户端并完成运行环境、模型检查</span></div>
@@ -816,7 +817,7 @@
 
     <section class="workbench" aria-label="示例创作台">
       <aside class="side-panel">
-        <div class="sidebar-brand">灵境 <small>一键调用算力，简单好用。</small></div>
+        <div class="sidebar-brand">LingJingAPI <small>一键调用算力，简单好用。</small></div>
         <button id="createView" class="nav-item active" type="button">✦　创作</button>
         <div class="project-heading"><span>我的项目</span><button id="newProject" type="button" aria-label="新建项目">＋</button></div>
         <div id="projectList" class="project-list"></div>
@@ -949,7 +950,7 @@
     </section>
 
     <footer>
-      <span>灵境 · LingJingAPI · 本地 API 新手示例</span>
+      <span>LingJingAPI · 本地 API 新手示例</span>
       <span>页面本身不包含模型，也不会替代客户端运行环境。</span>
     </footer>
   </main>
@@ -1396,7 +1397,7 @@
       const words = Array.from(String(prompt || "").normalize("NFKC").replace(/[^\p{L}\p{N}]/gu, "")).slice(0, 16).join("") || "作品";
       const extensions = {"image/png":"png", "image/jpeg":"jpg", "image/webp":"webp", "video/mp4":"mp4", "video/webm":"webm"};
       const suffix = extensions[mime.split(";")[0]] || String(path).split(/[?#]/)[0].match(/\.(png|jpe?g|webp|mp4|webm)$/i)?.[1] || "png";
-      return `灵境-${words}.${suffix}`;
+      return `LingJingAPI-${words}.${suffix}`;
     }
 
     let closeImageViewer = null;
@@ -1441,7 +1442,7 @@
         media.controls = true;
         media.playsInline = true;
       } else {
-        media.alt = "灵境 · LingJingAPI 生成图片";
+        media.alt = "LingJingAPI 生成图片";
         media.style.cursor = "zoom-in";
         media.addEventListener("click", () => openImageViewer(objectUrl, media.alt));
       }

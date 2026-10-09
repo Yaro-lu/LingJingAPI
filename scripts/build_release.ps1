@@ -92,7 +92,7 @@ function Remove-SafeTree {
         [Parameter(Mandatory)][string]$Target
     )
 
-    Assert-SafeChildPath -Parent $OutputBase -Child $Target -ExpectedLeafPrefix "LingJingAI-"
+    Assert-SafeChildPath -Parent $OutputBase -Child $Target -ExpectedLeafPrefix "LingJingAPI-"
     if (Test-Path -LiteralPath $Target) {
         Remove-Item -LiteralPath $Target -Recurse -Force
     }
@@ -372,7 +372,8 @@ function Assert-StagingPolicy {
         '(^|/)\.(env)(\.|$)',
         '\.(pyc|pyo|pfx|p12|key|token)$',
         '^(models|inputs|outputs|logs|tasks|temp|cache)(/|$)',
-        '^runtime/(requests|inputs|outputs|logs|tasks|temp|cache|env-backups|ui-review|workflow_import_tmp)(/|$)',
+        '^runtime/(requests|inputs|outputs|logs|tasks|temp|cache|env-backups|ui-review|workflow_import_tmp|dreamina-cli)(/|$)',
+        '^runtime/providers\.local\.txt$',
         '^runtime/comfyui(/|$)',
         '(^|/)git\.exe$',
         '^app/updater_runtime/(?!pip(?:/|$)|pip-license\.txt$)',
@@ -489,7 +490,7 @@ $OutputRoot = if ($OutputRoot) { Get-FullPath $OutputRoot } else { Join-Path $So
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 $OutputRoot = Get-FullPath $OutputRoot
 
-$ProductFolder = "LingJingAI-$Version-win-x64"
+$ProductFolder = "LingJingAPI-$Version-win-x64"
 $StagingBase = Join-Path $OutputRoot 'staging'
 $StageRoot = Join-Path $StagingBase $ProductFolder
 $ManifestPath = Join-Path $OutputRoot "$ProductFolder.members.json"
@@ -514,10 +515,13 @@ try {
     $requiredInputs = @(
         'app\gui\main_gateway.py',
         'app\gui\assets\app.ico',
+        'app\gui\assets\logo.svg',
+        'icon.png',
         'app\core\runtime_update.py',
         'app\core\runtime_update_helper.ps1',
         'app\core\comfyui_update.py',
         'app\core\comfyui_update_worker.py',
+        'app\core\external_providers.py',
         'app\comfyui_release.json',
         'workflows',
         'start.bat',
@@ -525,8 +529,8 @@ try {
         'README.md',
         'LICENSE',
         'THIRD_PARTY_NOTICES.md',
-        'assets\灵境造片厂使用教学.pdf',
-        'examples\灵境造片厂示例页.html',
+        'assets\LingJingAPI使用教学.pdf',
+        'examples\LingJingAPI示例页.html',
         'requirements.lock',
         'requirements-runtime.lock',
         'VERSION'
@@ -583,11 +587,11 @@ try {
         }
     }
     Copy-RequiredFile `
-        -Source (Join-Path $SourceRoot 'assets\灵境造片厂使用教学.pdf') `
-        -Destination (Join-Path $StageRoot '灵境造片厂使用教学.pdf')
+        -Source (Join-Path $SourceRoot 'assets\LingJingAPI使用教学.pdf') `
+        -Destination (Join-Path $StageRoot 'LingJingAPI使用教学.pdf')
     Copy-RequiredFile `
-        -Source (Join-Path $SourceRoot 'examples\灵境造片厂示例页.html') `
-        -Destination (Join-Path $StageRoot '灵境造片厂示例页.html')
+        -Source (Join-Path $SourceRoot 'examples\LingJingAPI示例页.html') `
+        -Destination (Join-Path $StageRoot 'LingJingAPI示例页.html')
     foreach ($screenshot in @('console.png', 'quick-repair.png', 'workflow-models.png', 'studio.png')) {
         Copy-RequiredFile `
             -Source (Join-Path $SourceRoot "assets\readme\$screenshot") `
@@ -595,7 +599,7 @@ try {
     }
 
     $releaseInfo = [ordered]@{
-        product = 'LingJingAI'
+        product = 'LingJingAPI'
         version = $Version
         platform = 'windows-x64'
         runtime_layout = 'bootstrap-python-separate-ai-runtime'
@@ -611,10 +615,13 @@ try {
     $requiredStagedFiles = @(
         'app\gui\main_gateway.py',
         'app\gui\assets\app.ico',
+        'app\gui\assets\logo.svg',
+        'icon.png',
         'app\core\runtime_update.py',
         'app\core\runtime_update_helper.ps1',
         'app\core\comfyui_update.py',
         'app\core\comfyui_update_worker.py',
+        'app\core\external_providers.py',
         'app\comfyui_release.json',
         'app\updater_runtime\pip\__main__.py',
         'app\updater_runtime\pip-LICENSE.txt',
@@ -636,8 +643,8 @@ try {
         'README.md',
         'LICENSE',
         'THIRD_PARTY_NOTICES.md',
-        '灵境造片厂使用教学.pdf',
-        '灵境造片厂示例页.html',
+        'LingJingAPI使用教学.pdf',
+        'LingJingAPI示例页.html',
         'requirements.lock',
         'requirements-runtime.lock',
         'VERSION',
@@ -673,7 +680,7 @@ try {
     }
 
     $manifest = [ordered]@{
-        product = 'LingJingAI'
+        product = 'LingJingAPI'
         version = $Version
         platform = 'windows-x64'
         member_count = $members.Count
@@ -692,7 +699,7 @@ try {
     }
 
     $compiler = Resolve-ISCC -RequestedPath $ISCCPath
-    $installerScript = Join-Path $SourceRoot 'installer\LingJing.iss'
+    $installerScript = Join-Path $SourceRoot 'installer\LingJingAPI.iss'
     if (-not (Test-Path -LiteralPath $installerScript -PathType Leaf)) {
         throw "Installer script is missing: $installerScript"
     }

@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGE_PATH = ROOT / "examples" / "灵境造片厂示例页.html"
+PAGE_PATH = ROOT / "examples" / "LingJingAPI示例页.html"
 
 
 class LocalExamplePageContractTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class LocalExamplePageContractTests(unittest.TestCase):
     def test_page_is_branded_and_has_three_creation_categories(self):
         page = self.page()
         for marker in (
-            "灵境 · LingJingAPI",
+            "LingJingAPI",
             "本地 API 示例页",
             'data-category="text"',
             'data-category="image"',

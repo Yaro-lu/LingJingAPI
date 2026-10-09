@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const html = fs.readFileSync(path.join(__dirname, '../examples/灵境造片厂示例页.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../examples/LingJingAPI示例页.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 class Element {
   constructor(tag = 'div') { this.tagName = tag.toUpperCase(); this.children = []; this.value = ''; this.style = {}; this.dataset = {}; this.files = []; this.listeners = {}; this.classList = { toggle() {} }; }
@@ -232,9 +232,9 @@ const api = context.window.LingJingExample;
   assert.equal(viewer.children[1].style.maxWidth, 'none');
   viewer.listeners.cancel({preventDefault(){}});
   assert.equal(viewer.removed, true);
-  assert.equal(hooks.artworkFilename('一“杯”猫<>:/\\*?\u0000', '/files/output.png'), '灵境-一杯猫.png');
-  assert.equal(hooks.artworkFilename('???', '', 'video/mp4'), '灵境-作品.mp4');
-  assert.equal(hooks.artworkFilename('a'.repeat(100), '', 'image/webp'), '灵境-' + 'a'.repeat(16) + '.webp');
+  assert.equal(hooks.artworkFilename('一“杯”猫<>:/\\*?\u0000', '/files/output.png'), 'LingJingAPI-一杯猫.png');
+  assert.equal(hooks.artworkFilename('???', '', 'video/mp4'), 'LingJingAPI-作品.mp4');
+  assert.equal(hooks.artworkFilename('a'.repeat(100), '', 'image/webp'), 'LingJingAPI-' + 'a'.repeat(16) + '.webp');
   const videoWork=hooks.projects[1].works[0]; videoWork.category='video'; videoWork.path='/v1/files/media/movie.mp4';
   switchedRequests.length=0;
   hooks.renderHistory(); await new Promise(resolve=>setImmediate(resolve));

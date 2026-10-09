@@ -62,6 +62,21 @@ class BundledImageWorkflowContractTests(unittest.TestCase):
         self.assertEqual(t2i["8"]["inputs"]["steps"], 4)
         self.assertEqual(t2i["10"]["inputs"]["width"], 768)
 
+    def test_lightweight_repair_replaces_unusable_flux_editor_workflow(self):
+        manifest = self.manifest("flux")
+        graph = self.workflow("flux")
+        self.assertEqual(manifest["model_group"], "Flux2 Klein 4B")
+        self.assertEqual(manifest["capability"], "image_to_image")
+        self.assertTrue(manifest["enabled"])
+        self.assertEqual(manifest["input_schema"]["required"], ["image", "prompt"])
+        self.assertTrue((ROOT / "workflows" / "flux" / "frontend_workflow.json").is_file())
+        self.assertEqual(graph["20"]["class_type"], "ImageScaleBy")
+        self.assertEqual(graph["20"]["inputs"]["scale_by"], 2.0)
+        self.assertEqual(graph["19"]["inputs"]["images"], ["20", 0])
+        original = self.workflow("flux2_klein_4b_v1")
+        for node_id in ("4", "5", "6"):
+            self.assertEqual(graph[node_id]["inputs"], original[node_id]["inputs"])
+
     def test_z_image_turbo_is_an_eight_step_768_text_to_image_graph(self):
         workflow = self.workflow("z_image_t2i_v1")
         self.assertEqual(

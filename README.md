@@ -1,6 +1,8 @@
-[简体中文](#灵境--lingjingapi) | [English](#english)
+[简体中文](#lingjingapi) | [English](#english)
 
-# 灵境 · LingJingAPI
+<img src="icon.png" alt="LingJingAPI 图标" width="72">
+
+# LingJingAPI
 
 **一键调用算力，简单好用。**
 
@@ -19,7 +21,9 @@
 
 ## 第一次使用：4 步开始
 
-当前版本为 `2.0.7`。在本仓库的 Releases 页面下载程序安装包，安装到有 NVIDIA 显卡的 Windows 算力机器上；安装时可以选择目录。程序与运行环境分开发布，安装包**不含模型**。
+当前版本为 `2.1.0`。在本仓库的 Releases 页面下载程序安装包，安装到有 NVIDIA 显卡的 Windows 算力机器上；安装时可以选择目录。程序与运行环境分开发布，安装包**不含模型**。
+
+程序与桌面入口统一名为 **LingJingAPI**。新安装默认目录为 `%LOCALAPPDATA%\Programs\LingJingAPI`；升级保留原安装位置、模型和生成结果。安装目录附带 `LingJingAPI示例页.html` 与 `LingJingAPI使用教学.pdf`。
 
 1. **启动程序**：运行环境或 Qwen3.5 文字模型缺失时，会出现“环境安装与修复”窗口。图片、视频模型缺失不会单独触发弹窗，可在“模型与环境”中查看和管理。
 2. **点击一键修复**：程序根据显存自动选择“大于 12 GB”或“小于等于 12 GB”档位。确认后点击“一键修复”，等待运行环境和文字、图片、视频模型下载、校验并启动；已有模型会复用。
@@ -28,7 +32,7 @@ FLUX.2 Klein 9B 的公开下载地址不改变其[非商业使用许可](https:/
 
 ![首次安装时的环境安装与修复界面](assets/readme/quick-repair.png)
 
-*截图摄于 2.0.3；2.0.4 已移除背景中的旧模式标识和平台登录入口，环境修复流程相同。*
+*截图摄于旧版，产品名称及图标以当前 LingJingAPI 为准；环境修复流程相同。*
 
 3. **复制连接信息**：在控制台取得 URL 和 API Key。同一台机器用“本地 URL”，同一局域网的电脑或手机用“局域网 URL”，异地设备用已连接的“公网 URL”。请勿公开 API Key。
 4. **开始生成**：在电脑或手机浏览器打开对应 URL，填入 API Key，选择可用工作流，输入提示词或上传参考图即可生成。
@@ -41,6 +45,7 @@ FLUX.2 Klein 9B 的公开下载地址不改变其[非商业使用许可](https:/
 - **多端调用**：支持电脑、手机、公网、本机及局域网访问。
 - **工作流与 API**：导入 ComfyUI 工作流，管理环境和模型，为第三方软件提供调用接口。
 - **统一任务队列**：电脑、手机和第三方请求按提交时间排队；可查看位置、取消等待或强制取消运行中的任务。
+- **可选第三方模型**：在“模型与环境”中配置 DeepSeek 文字、火山方舟 Seedream 图片与 Seedance 视频，或安装并绑定即梦 CLI。第三方调用使用你自己的服务商账号和额度。
 
 ## 界面演示
 
@@ -54,7 +59,7 @@ FLUX.2 Klein 9B 的公开下载地址不改变其[非商业使用许可](https:/
 
 ![工作流与模型管理](assets/readme/workflow-models.png)
 
-*后两张为界面演示，连接信息和状态数值为演示数据。*
+*截图保留旧版界面样式，当前程序统一使用 LingJingAPI 名称与新图标。后两张为界面演示，连接信息和状态数值为演示数据。*
 
 ## 使用说明
 
@@ -81,13 +86,21 @@ curl -X POST "https://your-server.example/v1/workflows/run/WORKFLOW_ID" \
 
 工作流位于 `workflows/<名称>/`，模型可放在 `models/` 或在客户端映射到其他位置。卸载程序不会递归删除模型、作品、运行环境或用户配置。
 
+### 第三方模型
+
+在算力端打开“模型与环境”→“第三方模型”→“配置”。DeepSeek 填自己的 API Key；火山 Seedream、Seedance 分别填写火山方舟 API Key 与模型 ID / 推理接入点 ID。即梦 CLI 先从[即梦官方 CLI 页面](https://jimeng.jianying.com/cli)安装，在配置中选择 `dreamina.exe`，保存后点击“绑定账号”按页面提示完成授权。每个渠道单独启用，未配置的渠道不会出现在浏览器的可用工作流列表中。
+
+配置保存在本机 `runtime/providers.local.txt`，API Key 经当前 Windows 用户的 DPAPI 加密；即梦 CLI 使用 `runtime/dreamina-cli/` 作为独立资料目录，系统凭据库仍由官方 CLI 管理。客户端的生成 API Key 只能调用已启用的渠道，不能读取第三方 Key 或修改服务地址。云端图片、视频结果下载到本机输出目录后通过原有任务接口获取。
+
+浏览器创作页选择相应的第三方模型即可提交。第三方软件也可以调用 `POST /v1/workflows/run/cloud_deepseek`、`cloud_seedream`、`cloud_seedance`、`cloud_dreamina_image` 或 `cloud_dreamina_video`；兼容接口还支持明确指定云模型的 `POST /v1/chat/completions`、`POST /api/v3/images/generations` 和 `POST /v1/videos/generations`。响应中的 `task_id` 与本地工作流使用同一队列和查询接口。也可通过 `GET /v1/providers` 查看不含密钥的配置状态。云服务实际生成可能产生服务商费用；本项目的自动化测试不发起付费调用。
+
 ## English
 
 **One-click access to compute power. Simple to use.**
 
 Deploy LingJingAPI on a Windows x64 machine with an NVIDIA GPU, then generate text, images, and video from a computer or phone using its URL and API Key. This works with rented remote compute or one shared office GPU machine. No platform account is required.
 
-Version `2.0.7`: download the installer from [Releases](https://github.com/Yaro-lu/LingJingAPI/releases). The program and runtime are distributed separately; the installer **does not include model weights**.
+Version `2.1.0`: download the installer from [Releases](https://github.com/Yaro-lu/LingJingAPI/releases). The program and runtime are distributed separately; the installer **does not include model weights**.
 
 1. Launch the program. The repair window appears if the runtime or Qwen3.5 text model is missing. Missing image or video models alone do not trigger it; manage them in “Models & Environment”.
 2. Use one-click repair. The program selects a profile based on whether VRAM is above 12 GB. It downloads and verifies the runtime and selected text, image, and video models; existing files are reused.
@@ -95,3 +108,5 @@ Version `2.0.7`: download the installer from [Releases](https://github.com/Yaro-
 4. Open the URL in a browser, enter the Key, select an available workflow, and submit a prompt or reference image. API clients can inspect the workflow schema and task endpoints shown above.
 
 The FLUX.2 Klein 9B public download link does not change its [non-commercial license](https://help.bfl.ai/articles/9272590838-self-serve-dev-license-overview-pricing); commercial use requires authorization from the model provider. The source code is offered under [Apache License 2.0](LICENSE), while third-party components retain their [own licenses](THIRD_PARTY_NOTICES.md).
+
+Optional cloud channels are configured in **Models & Environment**: DeepSeek for text, Volcengine Ark Seedream for images, Seedance for video, and the separately installed [official Dreamina CLI](https://jimeng.jianying.com/cli) for images/video. Your own provider credentials are protected locally with Windows DPAPI. Enabled channels appear as selectable workflows and share the existing task queue; provider credentials are never returned by the generation API.

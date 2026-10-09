@@ -1,5 +1,5 @@
 """
-灵境 · LingJingAPI — 主界面
+LingJingAPI — 主界面
 - 启动 ComfyUI + API 服务器 + Cloudflare Tunnel
 - 环境检测 / 运行时检查 / 模型检查
 - 进度监控面板
@@ -119,6 +119,9 @@ from app.core.quick_repair import (  # noqa: E402
     save_quick_repair_state,
 )
 from app.core.runtime_state import RuntimeState  # noqa: E402
+from app.core.external_providers import (  # noqa: E402
+    ProviderSettings, resolve_dreamina_cli, start_dreamina_login, finish_dreamina_login,
+)
 from app.config import Config  # noqa: E402
 from app.core.workflow_dependencies import (  # noqa: E402
     clear_model_index_cache,
@@ -772,7 +775,7 @@ def _ensure_extra_model_paths():
     """确保 ComfyUI 的模型路径配置指向当前有效的模型目录。"""
     yaml_path = BASE_DIR / "runtime" / "ComfyUI" / "extra_model_paths.yaml"
     models_path = json.dumps(_models_dir().resolve().as_posix(), ensure_ascii=False)
-    content = f"""# 灵境 · LingJingAPI — 自动生成的模型路径配置
+    content = f"""# LingJingAPI — 自动生成的模型路径配置
 comfyui:
     base_path: {models_path}
     checkpoints: checkpoints/
@@ -977,7 +980,7 @@ class GatewayApp(WindowBase):
     def __init__(self):
         super().__init__()
         self._tk_destroyed = False
-        self.title("灵境")
+        self.title("LingJingAPI")
         self.geometry(f"{LAYOUT['window_w']}x{LAYOUT['window_h']}")
         self.minsize(LAYOUT["min_w"], LAYOUT["min_h"])
         if CTK_AVAILABLE:
@@ -1502,7 +1505,7 @@ class GatewayApp(WindowBase):
 
         brand_text = tk.Frame(brand, bg=C["sidebar"])
         brand_text.pack(side="left", fill="x", expand=True)
-        tk.Label(brand_text, text="灵境", font=("Microsoft YaHei UI", 13, "bold"), fg=C["text"], bg=C["sidebar"]).pack(anchor="w")
+        tk.Label(brand_text, text="LingJingAPI", font=("Microsoft YaHei UI", 13, "bold"), fg=C["text"], bg=C["sidebar"]).pack(anchor="w")
         tk.Label(brand_text, text="一键调用算力，简单好用。", font=F["tiny"], fg=C["muted"], bg=C["sidebar"]).pack(anchor="w", pady=(2, 0))
 
         tk.Frame(self._sidebar, bg=C["sidebar_border"], height=1).pack(fill="x", padx=14, pady=(0, 12))
@@ -2575,7 +2578,7 @@ class GatewayApp(WindowBase):
             modal.lift()
             return
         modal = tk.Toplevel(self)
-        modal.title("灵境 · 任务队列")
+        modal.title("LingJingAPI · 任务队列")
         modal.geometry("570x480")
         modal.configure(bg=C["bg"])
         self._generation_queue_modal = modal
@@ -7304,10 +7307,12 @@ class GatewayApp(WindowBase):
 
     def _open_install_guide(self):
         """打开安装说明"""
-        pdf_path = BASE_DIR / "灵境造片厂使用教学.pdf"
-        if pdf_path.exists():
-            os.startfile(str(pdf_path))
-            return
+        for name in ("LingJingAPI使用教学.pdf", "灵境造片厂使用教学.pdf"):
+            for directory in (BASE_DIR, BASE_DIR / "assets"):
+                pdf_path = directory / name
+                if pdf_path.is_file():
+                    os.startfile(str(pdf_path))
+                    return
         guide_path = BASE_DIR / "README.md"
         if guide_path.exists():
             os.startfile(str(guide_path))
@@ -7695,7 +7700,7 @@ class GatewayApp(WindowBase):
         messagebox.showinfo(
             action,
             f"{label}将使用：\n{saved}\n\n"
-            "请退出并重新打开灵境 · LingJingAPI 后生效。\n"
+            "请退出并重新打开 LingJingAPI 后生效。\n"
             "原目录中的文件不会自动搬移；如果所选目录以后不存在，客户端会自动恢复默认位置。",
             parent=self,
         )
@@ -8698,6 +8703,152 @@ class GatewayApp(WindowBase):
                 comfy_log.close()
             print(f"[GUI] ComfyUI starting (output={outputs_dir})...")
 
+    def _open_provider_settings(self):
+        """Configure third-party model channels without exposing keys to API users."""
+        settings = ProviderSettings(Config(BASE_DIR).runtime_dir)
+        try:
+            profiles = settings.list_profiles()
+        except Exception as exc:
+            messagebox.showerror("第三方模型", f"读取配置失败：{exc}", parent=self)
+            return
+        popup = tk.Toplevel(self)
+        popup.title("第三方模型接口")
+        popup.configure(bg=C["bg"])
+        popup.transient(self)
+        popup.grab_set()
+        self._center_popup(popup, 820, 700)
+        panel = self._card(popup, fill="both", expand=True, padx=16, pady=16)
+        tk.Label(panel, text="第三方模型接口", font=F["title"], fg=C["text"],
+                 bg=C["card"]).pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(panel, text="API Key 仅保存在本机并由 Windows DPAPI 加密；云端生成可能产生服务商费用。",
+                 font=F["small"], fg=C["text2"], bg=C["card"]).pack(anchor="w", padx=20, pady=(0, 10))
+        fields = {}
+        for provider_id, profile in profiles.items():
+            box = tk.Frame(panel, bg=C["bg2"], highlightbackground=C["border2"], highlightthickness=1)
+            box.pack(fill="x", padx=20, pady=4)
+            top = tk.Frame(box, bg=C["bg2"])
+            top.pack(fill="x", padx=10, pady=(6, 4))
+            tk.Label(top, text=profile.name, font=F["bold"], fg=C["text"], bg=C["bg2"]).pack(side="left")
+            enabled = tk.BooleanVar(value=profile.enabled)
+            tk.Checkbutton(top, text="启用", variable=enabled, bg=C["bg2"], fg=C["text2"],
+                           selectcolor=C["card"], activebackground=C["bg2"]).pack(side="right")
+            row = tk.Frame(box, bg=C["bg2"])
+            row.pack(fill="x", padx=10, pady=(0, 8))
+            if provider_id == "dreamina":
+                tk.Label(row, text="CLI 路径", font=F["tiny"], fg=C["muted"], bg=C["bg2"]).pack(side="left")
+                path_entry = self._entry_widget(row, width=460)
+                path_entry.pack(side="left", fill="x", expand=True, padx=8)
+                path_entry.insert(0, profile.cli_path)
+                def browse(entry=path_entry):
+                    path = filedialog.askopenfilename(parent=popup, title="选择 dreamina.exe",
+                                                      filetypes=[("即梦 CLI", "dreamina.exe")])
+                    if path:
+                        entry.delete(0, "end")
+                        entry.insert(0, path)
+                self._button(row, "浏览", browse, "plain", width=64).pack(side="left")
+                self._button(row, "官方安装", lambda: webbrowser.open("https://jimeng.jianying.com/cli"),
+                             "plain", width=82).pack(side="left", padx=(6, 0))
+                self._button(row, "绑定账号", lambda: self._bind_dreamina_account(settings),
+                             "plain", width=88).pack(side="left", padx=(6, 0))
+                fields[provider_id] = {"enabled": enabled, "path": path_entry}
+                continue
+            base = self._entry_widget(row, width=230)
+            base.pack(side="left", fill="x", expand=True, padx=(0, 6))
+            base.insert(0, profile.base_url)
+            model = self._entry_widget(row, width=160)
+            model.pack(side="left", fill="x", expand=True, padx=(0, 6))
+            model.insert(0, profile.model_id)
+            key = self._entry_widget(row, show="•", width=180)
+            key.pack(side="left", fill="x", expand=True)
+            hint = "Key 已保存，留空保持" if profile.protected_key else "需要填写 API Key"
+            tk.Label(box, text=f"服务地址 / 模型或接入点 ID / API Key   ·   {hint}", font=F["tiny"],
+                     fg=C["muted"], bg=C["bg2"]).pack(anchor="w", padx=10, pady=(0, 6))
+            fields[provider_id] = {"enabled": enabled, "base": base, "model": model, "key": key}
+        status = tk.Label(panel, text="即梦 CLI 使用本项目独立资料目录；系统凭据库由官方 CLI 管理。",
+                          font=F["small"], fg=C["text2"], bg=C["card"])
+        status.pack(anchor="w", padx=20, pady=(12, 6))
+        actions = tk.Frame(panel, bg=C["card"])
+        actions.pack(fill="x", padx=20, pady=(8, 16))
+        def save():
+            try:
+                for provider_id, widgets in fields.items():
+                    if provider_id == "dreamina":
+                        settings.update(provider_id, enabled=widgets["enabled"].get(),
+                                        cli_path=widgets["path"].get().strip())
+                    else:
+                        kwargs = {"enabled": widgets["enabled"].get(),
+                                  "base_url": widgets["base"].get().strip(),
+                                  "model_id": widgets["model"].get().strip()}
+                        entered = widgets["key"].get().strip()
+                        if entered:
+                            kwargs["api_key"] = entered
+                        settings.update(provider_id, **kwargs)
+            except Exception as exc:
+                status.config(text=f"保存失败：{exc}", fg=C["error"])
+                return
+            popup.destroy()
+            dashboard = getattr(self, "_dashboard_pages", None)
+            if dashboard is not None:
+                dashboard.refresh(getattr(self, "_last_health", {}))
+            self._footer_label.config(text="  第三方模型配置已更新")
+        self._button(actions, "保存配置", save, "primary", width=110).pack(side="right")
+        self._button(actions, "取消", popup.destroy, "plain", width=72).pack(side="right", padx=(0, 8))
+
+    def _bind_dreamina_account(self, settings):
+        """Show the CLI's device authorization data; never store it in the gateway."""
+        profile = settings.get("dreamina")
+        if not resolve_dreamina_cli(profile.cli_path):
+            messagebox.showinfo("即梦 CLI", "请先填写 dreamina.exe 路径并保存配置。", parent=self)
+            return
+        popup = tk.Toplevel(self)
+        popup.title("绑定即梦账号")
+        popup.configure(bg=C["bg"])
+        popup.transient(self)
+        self._center_popup(popup, 520, 260)
+        status = tk.Label(popup, text="正在向即梦获取授权地址…", font=F["small"],
+                          fg=C["text"], bg=C["bg"], wraplength=470, justify="left")
+        status.pack(fill="x", padx=20, pady=(24, 16))
+        actions = tk.Frame(popup, bg=C["bg"])
+        actions.pack(fill="x", padx=20)
+        def load():
+            try:
+                result = start_dreamina_login(profile, Config(BASE_DIR).runtime_dir)
+            except Exception as exc:
+                self.after(0, lambda: status.config(text=f"即梦授权失败：{exc}"))
+                return
+            def show():
+                if not popup.winfo_exists():
+                    return
+                if result["reused"]:
+                    status.config(text="即梦账号登录状态已复用，可以直接调用。")
+                    self._dashboard_pages.refresh(getattr(self, "_last_health", {}))
+                    return
+                url, code = result["verification_uri"], result["user_code"]
+                device_code = result["device_code"]
+                if not (url and code and device_code):
+                    status.config(text="即梦 CLI 没有返回完整授权信息，请检查 CLI 版本。")
+                    return
+                status.config(text=f"请在浏览器打开：{url}\n输入授权码：{code}\n完成网页授权后点击“完成绑定”。")
+                self._button(actions, "打开授权页", lambda: webbrowser.open(url), "plain", width=110).pack(side="left")
+                def finish():
+                    def worker():
+                        ok = False
+                        try:
+                            ok = finish_dreamina_login(profile, Config(BASE_DIR).runtime_dir, device_code)
+                            message = "即梦账号绑定成功。" if ok else "尚未确认授权，请完成网页操作后重试。"
+                        except Exception as exc:
+                            message = f"绑定检查失败：{exc}"
+                        def display():
+                            if popup.winfo_exists():
+                                status.config(text=message)
+                            if ok:
+                                self._dashboard_pages.refresh(getattr(self, "_last_health", {}))
+                        self.after(0, display)
+                    threading.Thread(target=worker, daemon=True).start()
+                self._button(actions, "完成绑定", finish, "primary", width=100).pack(side="right")
+            self.after(0, show)
+        threading.Thread(target=load, daemon=True).start()
+
     def _start_api_service(self):
         lock = self._runtime_maintenance_lock
         if not lock.acquire(blocking=False):
@@ -9438,7 +9589,7 @@ class GatewayApp(WindowBase):
                 pystray.MenuItem("显示窗口", self._restore_from_tray, default=True),
                 pystray.MenuItem("退出", lambda *_args: self.after(0, self._on_close)),
             )
-            self._tray = pystray.Icon("ai_gateway", img, "灵境 · LingJingAPI", menu)
+            self._tray = pystray.Icon("ai_gateway", img, "LingJingAPI", menu)
             self._tray.run()
         except Exception as e:
             print(f"[Tray] 托盘创建失败: {e}")
@@ -9492,7 +9643,7 @@ class GatewayApp(WindowBase):
             return
         confirmed = messagebox.askyesno(
             "确认退出",
-            "确定要退出灵境 · LingJingAPI 吗？\n\n"
+            "确定要退出 LingJingAPI 吗？\n\n"
             "退出后将关闭：\n"
             "  - ComfyUI\n"
             "  - 本地 API 服务\n"
@@ -9770,12 +9921,20 @@ class GatewayApp(WindowBase):
 
 
 def main():
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "Yaro-lu.LingJingAPI"
+            )
+        except (OSError, AttributeError):
+            pass
     if not _acquire_instance_lock():
         root = tk.Tk()
         root.withdraw()
         messagebox.showinfo(
-            "灵境 · LingJingAPI 已在运行",
-            "已经打开了一个灵境 · LingJingAPI 客户端。\n\n请使用已打开的窗口，避免多个客户端同时同步 URL / Key。",
+            "LingJingAPI 已在运行",
+            "已经打开了一个 LingJingAPI 客户端。\n\n请使用已打开的窗口，避免多个客户端同时同步 URL / Key。",
             parent=root,
         )
         root.destroy()

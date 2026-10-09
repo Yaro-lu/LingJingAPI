@@ -1,7 +1,7 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title 灵境造片厂 - 环境检查
+title LingJingAPI - 环境检查
 cd /d "%~dp0"
 
 set "PYTHONNOUSERSITE=1"
@@ -9,7 +9,7 @@ set "PYTHONDONTWRITEBYTECODE=1"
 set "PYTHONUTF8=1"
 
 echo ========================================
-echo 灵境造片厂 - 本机环境检查
+echo LingJingAPI - 本机环境检查
 echo ========================================
 echo.
 

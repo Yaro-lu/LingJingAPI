@@ -450,8 +450,15 @@ class WorkflowRegistry:
             # 恢复用户设置
             existing = existing_map.get(wf.id)
             if existing:
-                wf.enabled = existing.enabled
-                wf.description = existing.description or wf.description
+                upgraded_pending = (
+                    manifest.get("replaces_pending_conversion") is True
+                    and existing.api_mapping.get("api_mapping_status") == "pending_conversion"
+                    and wf.api_mapping.get("api_mapping_status") != "pending_conversion"
+                    and bool(wf.workflow_json)
+                )
+                if not upgraded_pending:
+                    wf.enabled = existing.enabled
+                    wf.description = existing.description or wf.description
 
             discovered.append(wf)
             if wf.id not in existing_map:

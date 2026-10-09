@@ -11,6 +11,7 @@ from app.config import Config
 from app.core.runtime_package import REQUIRED_RUNTIME_PATHS
 from app.core.workflow_dependencies import clear_model_index_cache
 from app.workflow_registry import WorkflowDef
+from tests.test_image_compatibility import asgi_request
 
 
 FIXTURE_REQUIREMENTS = {
@@ -35,10 +36,13 @@ class ServerStatusTests(unittest.TestCase):
             )
 
     def test_client_page_supports_installation_and_source_layouts(self):
-        for directory in ("", "examples"):
-            with self.subTest(directory=directory), tempfile.TemporaryDirectory() as temp_dir:
+        layouts = [(name, directory)
+                   for name in ("LingJingAPI示例页.html", "灵境造片厂示例页.html")
+                   for directory in ("", "examples")]
+        for name, directory in layouts:
+            with self.subTest(name=name, directory=directory), tempfile.TemporaryDirectory() as temp_dir:
                 base = Path(temp_dir)
-                page = base / directory / "灵境造片厂示例页.html"
+                page = base / directory / name
                 page.parent.mkdir(parents=True, exist_ok=True)
                 page.write_text('<html>savedConnection.url || "http://127.0.0.1:18188"</html>', encoding="utf-8")
                 with mock.patch.object(server, "BASE_DIR", base):
@@ -49,6 +53,31 @@ class ServerStatusTests(unittest.TestCase):
                 self.assertIn("window.location.origin", response.body.decode())
                 self.assertIn("text/html", response.media_type)
                 self.assertIn("savedConnection.url", page.read_text(encoding="utf-8"))
+
+    def test_client_page_prefers_renamed_page_when_legacy_file_remains(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            (base / "LingJingAPI示例页.html").write_text("new page", encoding="utf-8")
+            (base / "灵境造片厂示例页.html").write_text("old page", encoding="utf-8")
+            with mock.patch.object(server, "BASE_DIR", base):
+                app = server.create_app()
+                endpoint = next(route.endpoint for route in app.routes if route.path == "/")
+                response = asyncio.run(endpoint())
+            self.assertEqual(response.body, b"new page")
+
+    def test_client_icon_is_public_for_reading_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            icon = b"public logo"
+            (base / "icon.png").write_bytes(icon)
+            with mock.patch.object(server, "BASE_DIR", base):
+                app = server.create_app()
+                status, headers, body = asyncio.run(asgi_request(app, "GET", "/icon.png"))
+                self.assertEqual((status, body), (200, icon))
+                self.assertEqual(headers["content-type"], "image/png")
+                self.assertEqual(asyncio.run(asgi_request(app, "HEAD", "/icon.png"))[0], 200)
+                self.assertEqual(asyncio.run(asgi_request(app, "POST", "/icon.png"))[0], 401)
+                self.assertEqual(asyncio.run(asgi_request(app, "GET", "/icon.png/../runtime/config.local.txt"))[0], 401)
 
     def test_server_version_matches_release_version_file(self):
         expected = (Path(__file__).resolve().parents[1] / "VERSION").read_text(

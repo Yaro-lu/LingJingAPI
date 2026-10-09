@@ -53,7 +53,7 @@ class BundledWanWorkflowContractTests(unittest.TestCase):
         )
 
     def test_installer_never_deletes_the_restored_original_workflow(self):
-        installer = (ROOT / "installer" / "LingJing.iss").read_text(encoding="utf-8-sig")
+        installer = (ROOT / "installer" / "LingJingAPI.iss").read_text(encoding="utf-8-sig")
         self.assertNotIn(
             r'{app}\workflows\wan_flf2v_v1\wan2.1_flf2v_720_f16.json',
             installer,

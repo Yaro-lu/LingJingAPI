@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"
+    role="img" aria-labelledby="title">
+  <title id="title">LingJingAPI — connected compute gateway</title>
+  <defs>
+    <linearGradient id="background" x1="0" y1="1" x2="1" y2="0">
+      <stop stop-color="#1242ef"/>
+      <stop offset="1" stop-color="#8735ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <g fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round"
+     stroke-linejoin="round">
+    <path d="M178 164 L92 256 L178 348"/>
+    <path d="M334 164 L420 256 L334 348"/>
+    <path d="M220 256 H292" stroke-width="18"/>
+  </g>
+  <g fill="#fff">
+    <circle cx="220" cy="256" r="22"/>
+    <circle cx="292" cy="256" r="22"/>
+  </g>
+</svg>

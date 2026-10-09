@@ -224,7 +224,7 @@ class Config:
         temporary = self.config_path.with_suffix(self.config_path.suffix + ".tmp")
         try:
             with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-                handle.write("# 灵境 · LingJingAPI 高级设置\n")
+                handle.write("# LingJingAPI 高级设置\n")
                 handle.write("# 修改端口、显存模式等参数后，请退出并重新打开客户端。\n\n")
                 handle.write("# directories 中可填写现有的绝对目录；留空使用安装目录下的默认位置。\n")
                 handle.write("# 如果映射目录不存在，客户端会自动清除该项并恢复默认位置。\n\n")

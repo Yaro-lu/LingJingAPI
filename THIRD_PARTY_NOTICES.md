@@ -1,6 +1,6 @@
 # 第三方组件说明 / Third-Party Notices
 
-灵境 · LingJingAPI 中由项目作者拥有版权并有权授权的部分采用 Apache License 2.0。本文件用于提示主要第三方组件及其许可证来源；Apache License 2.0 不会覆盖这些第三方内容，也不替代各组件随包附带的完整许可证文本。
+LingJingAPI 中由项目作者拥有版权并有权授权的部分采用 Apache License 2.0。本文件用于提示主要第三方组件及其许可证来源；Apache License 2.0 不会覆盖这些第三方内容，也不替代各组件随包附带的完整许可证文本。
 
 主要组件包括：
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the installed LingJingAI Chinese user and API guide."""
+"""Generate the installed LingJingAPI Chinese user and API guide."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from reportlab.platypus import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = ROOT / "assets" / "灵境造片厂使用教学.pdf"
+DEFAULT_OUTPUT = ROOT / "assets" / "LingJingAPI使用教学.pdf"
 CLIENT_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
 RUNTIME_RELEASE = json.loads(
     (ROOT / "app" / "runtime_release.json").read_text(encoding="utf-8-sig")
@@ -251,7 +251,7 @@ def draw_page_frame(canvas, doc):
         canvas.line(22 * mm, height - 15 * mm, width - 22 * mm, height - 15 * mm)
         canvas.setFont("LingJing", 7.5)
         canvas.setFillColor(TEXT_2)
-        canvas.drawString(22 * mm, height - 11.5 * mm, "灵境 · LingJingAPI 使用教学与接口说明")
+        canvas.drawString(22 * mm, height - 11.5 * mm, "LingJingAPI 使用教学与接口说明")
     canvas.line(22 * mm, 14 * mm, width - 22 * mm, 14 * mm)
     canvas.setFont("LingJing", 7.5)
     canvas.setFillColor(TEXT_2)
@@ -267,7 +267,7 @@ def build_story(s):
         image = Image(str(logo), width=28 * mm, height=28 * mm)
         image.hAlign = "CENTER"
         story.extend([Spacer(1, 18 * mm), image, Spacer(1, 8 * mm)])
-    story.append(Paragraph("灵境 · LingJingAPI", s["cover_title"]))
+    story.append(Paragraph("LingJingAPI", s["cover_title"]))
     story.append(Paragraph("一键调用算力，简单好用。", s["cover_subtitle"]))
     story.append(Paragraph("使用教学与 API 接口说明", s["cover_subtitle"]))
     story.append(Spacer(1, 12 * mm))
@@ -304,7 +304,7 @@ def build_story(s):
 
     story.extend([PageBreak(), Paragraph("1. 安装与第一次启动", s["h1"])])
     story.append(Paragraph("1. 双击轻量安装包，按提示完成安装。安装过程不需要管理员权限，也不会安装模型。", s["step"]))
-    story.append(Paragraph("2. 安装完成后，桌面会出现两个使用同一 Logo 的入口：“灵境 · LingJingAPI”用于启动客户端，“灵境 · LingJingAPI 示例页”用于第一次体验接口。", s["step"]))
+    story.append(Paragraph("2. 安装完成后，桌面会出现两个使用同一 Logo 的入口：“LingJingAPI”用于启动客户端，“LingJingAPI 示例页”用于第一次体验接口。", s["step"]))
     story.append(Paragraph("3. 客户端界面可以立即打开；此时文字、图片和视频生成仍不可用，因为大型 AI 运行环境独立分发。", s["step"]))
     story.append(Paragraph("4. 进入“模型与环境”，安装或修复运行环境。客户端会自动拉取环境包，并使用内置 SHA256 校验，通过后直接安装。", s["step"]))
     story.append(Paragraph("5. 只有自动拉取失败时，客户端才会显示“自动修复失败”弹窗。可复制 GitHub 地址，手动下载环境包，再选择本地环境包完成安装。", s["step"]))
@@ -313,9 +313,9 @@ def build_story(s):
     story.append(Paragraph("安装目录中的主要入口", s["h2"]))
     entry_rows = [
         ["名称", "用途"],
-        ["灵境 · LingJingAPI", "正式启动入口，使用项目 Logo"],
-        ["灵境造片厂示例页.html", "本地纯前端新手页面；填写 URL 和 Key 后自动检测模型并调用生成"],
-        ["灵境造片厂使用教学.pdf", "当前使用教学与接口说明"],
+        ["LingJingAPI", "正式启动入口，使用项目 Logo"],
+        ["LingJingAPI示例页.html", "本地纯前端新手页面；填写 URL 和 Key 后自动检测模型并调用生成"],
+        ["LingJingAPI使用教学.pdf", "当前使用教学与接口说明"],
         ["models", "用户模型目录，更新客户端时保留"],
         ["outputs", "生成结果目录"],
         ["workflows", "内置或导入的工作流定义"],
@@ -370,7 +370,7 @@ def build_story(s):
 
     story.extend([PageBreak(), Paragraph("3. API 接入基础", s["h1"])])
     story.append(Paragraph("新手示例页", s["h2"]))
-    story.append(Paragraph("“灵境造片厂示例页.html”完全保存在本机，是一个不依赖额外服务的纯前端页面。可直接通过客户端 URL 打开，也可使用独立 HTML 文件。连接后只显示当前可用的工作流，选择后按该工作流加载参数。", s["body"]))
+    story.append(Paragraph("“LingJingAPI示例页.html”完全保存在本机，是一个不依赖额外服务的纯前端页面。可直接通过客户端 URL 打开，也可使用独立 HTML 文件。连接后只显示当前可用的工作流，选择后按该工作流加载参数。", s["body"]))
     story.append(note_box("在网页右上角填写 URL 和 API Key 后连接，右侧选择工作流并输入提示词。视频输入按工作流要求选择首帧、尾帧或参考图。连接信息会保存在当前浏览器，刷新时尝试自动连接一次，请在自己的设备上使用。", s["body"]))
     story.append(Paragraph("地址与鉴权", s["h2"]))
     story.append(Paragraph("控制台会显示公网、本地及局域网 BASE_URL，以及生成接口使用的 API_KEY。除 `/healthz` 外，业务接口通常需要在请求头中携带 Bearer Token。本机和支持的私有局域网地址可使用 HTTP，公网地址必须使用 HTTPS。手机建议在浏览器直接打开局域网 URL，并确保同一网络和 Windows 防火墙允许访问。", s["body"]))
@@ -430,9 +430,9 @@ def build_pdf(output: Path) -> None:
         leftMargin=22 * mm,
         topMargin=22 * mm,
         bottomMargin=20 * mm,
-        title="灵境 · LingJingAPI 使用教学与 API 接口说明",
+        title="LingJingAPI 使用教学与 API 接口说明",
         author="Yaro-lu",
-        subject="灵境 · LingJingAPI 轻量客户端使用教学、环境安装与 API 接口说明",
+        subject="LingJingAPI 轻量客户端使用教学、环境安装与 API 接口说明",
     )
     document.build(
         build_story(styles()),

@@ -18,6 +18,7 @@ from app.core.runtime_package import (
     missing_runtime_paths,
 )
 from app.core.model_maintenance import MODEL_REQUIREMENTS
+from app.core.external_providers import ProviderSettings
 from app.core.workflow_dependencies import workflow_dependency_report
 from app.workflow_registry import merge_workflow_catalog, read_local_workflow_catalog
 
@@ -142,6 +143,8 @@ class StaticDashboardPages:
                 "runtime": self._runtime_status(),
                 "environment_check": getattr(self.app, "_environment_status", {}),
                 "api_key": bool(getattr(self.app, "_api_key", "")),
+                "providers": [profile.public_status() for profile in
+                              ProviderSettings(Config(BASE_DIR).runtime_dir).list_profiles().values()],
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -655,6 +658,20 @@ class StaticDashboardPages:
         self._metric(metrics, 2, "缺少文件", f"{missing_count} 个", "只下载实际需要的内容", "warn" if missing_count else "success")
 
         self._build_workflow_models(body)
+
+        profiles = ProviderSettings(Config(BASE_DIR).runtime_dir).list_profiles()
+        self._section_heading(body, "第三方模型", "使用自己的 API Key 或即梦 CLI；按需调用，不影响本地模型")
+        provider_card = self._card(body)
+        provider_card.pack(fill="x", pady=(0, 14))
+        for index, profile in enumerate(profiles.values()):
+            row = tk.Frame(provider_card, bg=self.c["card"])
+            row.pack(fill="x", padx=16, pady=8)
+            self._action(row, "配置", self.app._open_provider_settings, "plain", 74).pack(side="right")
+            self._badge(row, "已就绪" if profile.configured else "未配置", "success" if profile.configured else "neutral").pack(side="right", padx=(0, 12))
+            tk.Label(row, text=profile.name, font=self.f["bold"], fg=self.c["text"],
+                     bg=self.c["card"], anchor="w").pack(side="left", fill="x", expand=True)
+            if index < len(profiles) - 1:
+                tk.Frame(provider_card, bg=self.c["border2"], height=1).pack(fill="x", padx=16)
 
         self._section_heading(body, "运行环境维护", "安装一次，之后由客户端自动启动")
         runtime_card = self._card(body, 78)
