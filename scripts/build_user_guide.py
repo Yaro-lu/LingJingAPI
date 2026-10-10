@@ -305,9 +305,10 @@ def build_story(s):
     story.extend([PageBreak(), Paragraph("1. 安装与第一次启动", s["h1"])])
     story.append(Paragraph("1. 双击轻量安装包，按提示完成安装。安装过程不需要管理员权限，也不会安装模型。", s["step"]))
     story.append(Paragraph("2. 安装完成后，桌面会出现两个使用同一 Logo 的入口：“LingJingAPI”用于启动客户端，“LingJingAPI 示例页”用于第一次体验接口。", s["step"]))
-    story.append(Paragraph("3. 客户端界面可以立即打开；此时文字、图片和视频生成仍不可用，因为大型 AI 运行环境独立分发。", s["step"]))
-    story.append(Paragraph("4. 进入“模型与环境”，安装或修复运行环境。客户端会自动拉取环境包，并使用内置 SHA256 校验，通过后直接安装。", s["step"]))
-    story.append(Paragraph("5. 只有自动拉取失败时，客户端才会显示“自动修复失败”弹窗。可复制 GitHub 地址，手动下载环境包，再选择本地环境包完成安装。", s["step"]))
+    story.append(Paragraph("3. 默认打开新手模式：环境或 Qwen3.5 缺失时，点击“一键修复”，自动准备运行环境和默认图文视频模型。已有可用环境会直接启动服务，不要求重新完成引导。", s["step"]))
+    story.append(Paragraph("4. 修复前会显示环境与模型的完整下载量和本次剩余量，全新安装约下载 52.06 GB 或 67.30 GB。已有模型与断点会复用，进度按实际字节计算；下载完成后仍需安装、校验与启动验证，安装后磁盘占用另计。", s["step"]))
+    story.append(Paragraph("5. 等待状态显示“启动成功”，点击“开始创作”，自动打开并连接示例页面。其他电脑或手机通过 URL + Key 调用。顶部居中切换新手 / 专家模式；专家模式保留原控制台、模型管理和设置。", s["step"]))
+    story.append(Paragraph("自动下载失败时按弹窗中的备用网盘提示手动下载环境包，再导入本地环境包。大文件 SHA256 校验只在修复时进行，启动检测保持轻量。", s["body"]))
     story.append(Spacer(1, 3 * mm))
     story.append(note_box(f"运行环境包文件名：<b>{RUNTIME_PACKAGE_NAME}</b><br/>项目主页：<b>{PROJECT_URL}</b>", s["body"], SOFT_WARN))
     story.append(Paragraph("安装目录中的主要入口", s["h2"]))
@@ -328,6 +329,16 @@ def build_story(s):
     entry_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), ACCENT_DARK), ("GRID", (0, 0), (-1, -1), 0.5, BORDER), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
     story.append(entry_table)
 
+    screenshot = ROOT / "assets" / "readme" / "beginner-mode.png"
+    if screenshot.is_file():
+        story.extend([PageBreak(), Paragraph("图解 · 新手模式", s["h1"])])
+        picture = Image(str(screenshot))
+        picture.drawHeight *= 166 * mm / picture.drawWidth
+        picture.drawWidth = 166 * mm
+        story.append(picture)
+        story.append(Spacer(1, 5 * mm))
+        story.append(Paragraph("无需填写配置：一键准备环境与模型，启动后提供 URL 与生成 Key。已有可用环境直接启动，截图中的首次引导提示以实际检测结果为准。需要更多管理功能时，切换顶部“专家模式”。", s["body"]))
+
     story.extend([PageBreak(), Paragraph("2. 环境、模型与工作流", s["h1"])])
     story.append(Paragraph("运行环境", s["h2"]))
     story.append(Paragraph("运行环境包含便携 Python、ComfyUI、Torch/CUDA 和 Cloudflared。客户端会先校验环境包名称、精确大小、SHA256 和目录结构，再事务替换环境目录。模型、工作流和生成结果不会因为环境修复而删除。", s["body"]))
@@ -336,7 +347,7 @@ def build_story(s):
     story.append(Paragraph("模型默认放在安装根目录的 models 文件夹，也可在“模型文件”中映射已有模型。修改目录后会扫描并适配相同的目录结构。优先使用可信来源的 safetensors 或 GGUF 文件，不要导入来源不明的传统 PyTorch checkpoint。", s["body"]))
     story.append(Paragraph("工作流", s["h2"]))
     story.append(Paragraph("每个工作流至少包含 manifest.json 和 workflow.json。manifest.json 定义公开调用名称、输入参数、输出类型和模型依赖。导入后应在“模型与环境”的工作流列表确认状态为“可以使用”。", s["body"]))
-    story.append(Paragraph("推荐操作顺序", s["h2"]))
+    story.append(Paragraph("专家模式的操作顺序", s["h2"]))
     for index, text in enumerate(
         [
             "安装或修复运行环境，并执行“检查环境”。",
@@ -380,9 +391,9 @@ def build_story(s):
     story.append(endpoint_table(s))
     story.append(Paragraph("创作页右侧的“接口文档”提供当前工作流的参数和调用示例。第三方先读取 GET /v1/workflows/{workflow_id}/schema，再按该 schema 提交参数。", s["body"]))
     story.append(Spacer(1, 4 * mm))
-    story.append(note_box("不要把 API Key 写入公开网页、代码仓库、聊天截图或日志。公网 URL 是互联网入口，应和 API Key 一起妥善保存。", s["body"], SOFT_WARN))
 
     story.extend([PageBreak(), Paragraph("4. 调用示例与异步任务", s["h1"])])
+    story.append(note_box("不要把 API Key 写入公开网页、代码仓库、聊天截图或日志。公网 URL 是互联网入口，应和 API Key 一起妥善保存。", s["body"], SOFT_WARN))
     story.append(Paragraph("运行默认工作流", s["h2"]))
     story.append(code_box('curl -X POST "BASE_URL/" ^\n  -H "Authorization: Bearer API_KEY" ^\n  -H "Content-Type: application/json" ^\n  -d "{\\"prompt\\":\\"一只在窗边晒太阳的猫\\"}"', s["code"]))
     story.append(Paragraph("OpenAI 风格文字接口", s["h2"]))

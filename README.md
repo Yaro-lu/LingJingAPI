@@ -21,21 +21,23 @@
 
 ## 第一次使用：4 步开始
 
-当前版本为 `2.1.0`。在本仓库的 Releases 页面下载程序安装包，安装到有 NVIDIA 显卡的 Windows 算力机器上；安装时可以选择目录。程序与运行环境分开发布，安装包**不含模型**。
+当前版本为 `2.1.1`。在本仓库的 Releases 页面下载程序安装包，安装到有 NVIDIA 显卡的 Windows 算力机器上；安装时可以选择目录。程序与运行环境分开发布，安装包**不含模型**。
 
 程序与桌面入口统一名为 **LingJingAPI**。新安装默认目录为 `%LOCALAPPDATA%\Programs\LingJingAPI`；升级保留原安装位置、模型和生成结果。安装目录附带 `LingJingAPI示例页.html` 与 `LingJingAPI使用教学.pdf`。
 
-1. **启动程序**：运行环境或 Qwen3.5 文字模型缺失时，会出现“环境安装与修复”窗口。图片、视频模型缺失不会单独触发弹窗，可在“模型与环境”中查看和管理。
-2. **点击一键修复**：程序根据显存自动选择“大于 12 GB”或“小于等于 12 GB”档位。确认后点击“一键修复”，等待运行环境和文字、图片、视频模型下载、校验并启动；已有模型会复用。
+1. **启动程序**：默认进入新手模式，环境或 Qwen3.5 缺失时提示“一键修复”，无需填写配置。已有可用环境会直接启动服务。顶部居中的标签可以切换到专家模式，原控制台、模型管理和设置界面完整保留，并记住上次选择。
+2. **点击一键修复**：新手模式根据显存自动选择默认图文视频模型，准备环境、下载校验、启动服务并验证工作流；已有文件会复用，环境替换重启后继续修复。专家模式仍可手动选择显存档位。启动检查只读取环境和 Qwen3.5 状态，大文件 SHA256 校验仅在点击修复后进行。
 
 FLUX.2 Klein 9B 的公开下载地址不改变其[非商业使用许可](https://help.bfl.ai/articles/9272590838-self-serve-dev-license-overview-pricing)；商用需取得模型方授权。
 
-![首次安装时的环境安装与修复界面](assets/readme/quick-repair.png)
+修复前会显示环境与模型的完整下载量及本次剩余下载量；全新安装约需下载 **52.06 GB 或 67.30 GB**，取决于所选模型档位。已有文件与下载断点会复用，进度按实际字节计算，安装后的磁盘占用另计。
 
-*截图摄于旧版，产品名称及图标以当前 LingJingAPI 为准；环境修复流程相同。*
+![LingJingAPI 新手模式](assets/readme/beginner-mode.png)
 
-3. **复制连接信息**：在控制台取得 URL 和 API Key。同一台机器用“本地 URL”，同一局域网的电脑或手机用“局域网 URL”，异地设备用已连接的“公网 URL”。请勿公开 API Key。
-4. **开始生成**：在电脑或手机浏览器打开对应 URL，填入 API Key，选择可用工作流，输入提示词或上传参考图即可生成。
+*新手模式集中显示服务状态、URL、Key 与“一键修复”；专家模式保留完整管理界面。截图中的首次引导提示以当前实际环境检测结果为准。*
+
+3. **等待启动成功**：新手模式显示服务状态、URL 和生成 Key；URL 优先显示可用公网地址，其次局域网、本机地址。专家模式可以分别查看三种地址。请勿公开 API Key。
+4. **开始生成**：新手模式点击“开始创作”，打开本机示例页面并自动连接。其他电脑或手机打开对应 URL，填入 Key，选择工作流，输入提示词或上传参考图即可生成。
 
 下载中断时，可到“模型与环境”再次点击“一键修复”；环境包自动下载失败时可按页面提示手动导入。卸载程序会保留模型和生成结果，并提示它们的保存位置。
 
@@ -100,12 +102,13 @@ curl -X POST "https://your-server.example/v1/workflows/run/WORKFLOW_ID" \
 
 Deploy LingJingAPI on a Windows x64 machine with an NVIDIA GPU, then generate text, images, and video from a computer or phone using its URL and API Key. This works with rented remote compute or one shared office GPU machine. No platform account is required.
 
-Version `2.1.0`: download the installer from [Releases](https://github.com/Yaro-lu/LingJingAPI/releases). The program and runtime are distributed separately; the installer **does not include model weights**.
+Version `2.1.1`: download the installer from [Releases](https://github.com/Yaro-lu/LingJingAPI/releases). The program and runtime are distributed separately; the installer **does not include model weights**.
 
-1. Launch the program. The repair window appears if the runtime or Qwen3.5 text model is missing. Missing image or video models alone do not trigger it; manage them in “Models & Environment”.
-2. Use one-click repair. The program selects a profile based on whether VRAM is above 12 GB. It downloads and verifies the runtime and selected text, image, and video models; existing files are reused.
-3. Copy the local, LAN, or public URL and the generation API Key from the control panel. Keep the Key private.
-4. Open the URL in a browser, enter the Key, select an available workflow, and submit a prompt or reference image. API clients can inspect the workflow schema and task endpoints shown above.
+1. Beginner mode offers one-click setup when the runtime or Qwen3.5 is missing, and starts an already working installation directly. The centered switch at the top opens Expert mode with the original dashboard, model management and settings; your mode is remembered.
+2. One-click repair automatically chooses the existing VRAM profile and prepares the runtime and default text, image and video workflows. Files are reused and repair resumes after runtime replacement. Startup checks remain lightweight; model hashes are checked only after clicking repair. Expert mode retains manual profile selection.
+   The dialog estimates the total and remaining download volume. A fresh setup downloads approximately 52.06 GB or 67.30 GB, depending on the model profile; reused files and resumable data are credited. Download progress is weighted by bytes; installed disk usage differs.
+3. Wait for the service to report a successful start, then copy its URL and generation Key if needed. The displayed URL prefers a working public address, then LAN, then local access. Keep the Key private.
+4. Click “Start creating” to open the existing example page with the local connection filled in automatically. Other devices can open the shared URL and enter the Key. API clients can inspect the workflow schema and task endpoints shown above.
 
 The FLUX.2 Klein 9B public download link does not change its [non-commercial license](https://help.bfl.ai/articles/9272590838-self-serve-dev-license-overview-pricing); commercial use requires authorization from the model provider. The source code is offered under [Apache License 2.0](LICENSE), while third-party components retain their [own licenses](THIRD_PARTY_NOTICES.md).
 

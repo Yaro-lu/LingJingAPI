@@ -514,6 +514,8 @@ try {
     Write-Step "Validating release inputs"
     $requiredInputs = @(
         'app\gui\main_gateway.py',
+        'app\gui\beginner_mode.py',
+        'app\core\beginner_mode.py',
         'app\gui\assets\app.ico',
         'app\gui\assets\logo.svg',
         'icon.png',
@@ -530,6 +532,7 @@ try {
         'LICENSE',
         'THIRD_PARTY_NOTICES.md',
         'assets\LingJingAPI使用教学.pdf',
+        'assets\readme\beginner-mode.png',
         'examples\LingJingAPI示例页.html',
         'requirements.lock',
         'requirements-runtime.lock',
@@ -555,6 +558,9 @@ try {
         -Source $UpdaterPipLicensePath `
         -Destination (Join-Path $StageRoot 'app\updater_runtime\pip-LICENSE.txt')
     Copy-AllowlistedTree -Source (Join-Path $SourceRoot 'workflows') -Destination (Join-Path $StageRoot 'workflows') -Profile Workflow
+    foreach ($readmeImage in @('beginner-mode.png', 'console.png', 'studio.png', 'workflow-models.png')) {
+        Copy-RequiredFile -Source (Join-Path $SourceRoot "assets\readme\$readmeImage") -Destination (Join-Path $StageRoot "assets\readme\$readmeImage")
+    }
     Copy-AllowlistedTree -Source $BootstrapPythonRoot -Destination (Join-Path $StageRoot 'runtime\python') -Profile BootstrapPython
     Copy-BootstrapPackages -Source $BootstrapSitePackagesRoot -Destination (Join-Path $StageRoot '.venv\Lib\site-packages')
 
@@ -614,6 +620,8 @@ try {
 
     $requiredStagedFiles = @(
         'app\gui\main_gateway.py',
+        'app\gui\beginner_mode.py',
+        'app\core\beginner_mode.py',
         'app\gui\assets\app.ico',
         'app\gui\assets\logo.svg',
         'icon.png',
@@ -644,6 +652,7 @@ try {
         'LICENSE',
         'THIRD_PARTY_NOTICES.md',
         'LingJingAPI使用教学.pdf',
+        'assets\readme\beginner-mode.png',
         'LingJingAPI示例页.html',
         'requirements.lock',
         'requirements-runtime.lock',

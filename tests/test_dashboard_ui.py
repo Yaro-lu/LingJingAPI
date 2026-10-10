@@ -78,6 +78,15 @@ class FakeWidget:
 
 
 class DashboardShellTests(unittest.TestCase):
+    def setUp(self):
+        # These regression tests exercise the unchanged expert dashboard.
+        preferences = mock.patch.object(
+            main_gateway, "load_interface_preferences",
+            return_value={"mode": "expert", "onboarding_complete": False, "profile": ""},
+        )
+        preferences.start()
+        self.addCleanup(preferences.stop)
+
     def test_release_version_comparison_uses_numeric_semver(self):
         cases = (
             ("1.0.2", "v1.0.3", True),

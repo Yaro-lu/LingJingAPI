@@ -2265,10 +2265,21 @@
       if (event.key === "Enter") connectClient();
     });
 
+    function consumeLaunchKey(location = window.location, history = window.history) {
+      if (!location || !["http:", "https:"].includes(location.protocol)) return "";
+      const params = new URLSearchParams(String(location.hash || "").slice(1));
+      const key = params.get("lingjing_key") || "";
+      if (key) history.replaceState(null, "", location.pathname + location.search);
+      return key;
+    }
+
+    // The desktop launcher uses a fragment, never a query parameter. Remove it
+    // immediately and connect only to this served page's own origin.
+    const launchKey = consumeLaunchKey();
     let savedConnection = {};
     try { savedConnection = JSON.parse(localStorage.getItem("lingjing_connection") || "{}") || {}; } catch {}
-    elements.baseUrl.value = savedConnection.url || "http://127.0.0.1:18188";
-    elements.apiKey.value = savedConnection.key || sessionStorage.getItem("lingjing_example_api_key") || "";
+    elements.baseUrl.value = launchKey ? window.location.origin : (savedConnection.url || "http://127.0.0.1:18188");
+    elements.apiKey.value = launchKey || savedConnection.key || sessionStorage.getItem("lingjing_example_api_key") || "";
     window.LingJingExample = Object.freeze({ normalizeBaseUrl, normalizeModels, categoryForModel, isPrivateLanHost, createWorkflowCache });
     renderCategory();
     renderProjects();

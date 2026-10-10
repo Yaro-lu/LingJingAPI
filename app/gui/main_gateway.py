@@ -118,6 +118,11 @@ from app.core.quick_repair import (  # noqa: E402
     profile_model_items,
     save_quick_repair_state,
 )
+from app.core.beginner_mode import (
+    automatic_repair_profile, load_interface_preferences, beginner_download_plan,
+    beginner_download_summary, beginner_model_download_progress, bounded_file_size,
+)
+from app.gui.beginner_mode import BeginnerModeMixin
 from app.core.runtime_state import RuntimeState  # noqa: E402
 from app.core.external_providers import (  # noqa: E402
     ProviderSettings, resolve_dreamina_cli, start_dreamina_login, finish_dreamina_login,
@@ -949,7 +954,7 @@ class SlimRoundedScrollbar(tk.Canvas):
 WindowBase = ctk.CTk if CTK_AVAILABLE else tk.Tk
 
 
-class GatewayApp(WindowBase):
+class GatewayApp(BeginnerModeMixin, WindowBase):
     def after(self, ms, func=None, *args):
         """Ignore late worker callbacks once the Tk interpreter is closing."""
         if getattr(self, "_tk_destroyed", False):
@@ -981,8 +986,10 @@ class GatewayApp(WindowBase):
         super().__init__()
         self._tk_destroyed = False
         self.title("LingJingAPI")
-        self.geometry(f"{LAYOUT['window_w']}x{LAYOUT['window_h']}")
-        self.minsize(LAYOUT["min_w"], LAYOUT["min_h"])
+        # The added mode bar sits above the original expert shell. Keep the
+        # expert content's available height rather than squeezing its layout.
+        self.geometry(f"{LAYOUT['window_w']}x{LAYOUT['window_h'] + 48}")
+        self.minsize(LAYOUT["min_w"], LAYOUT["min_h"] + 48)
         if CTK_AVAILABLE:
             self.configure(fg_color=C["bg"])
         else:
@@ -1029,6 +1036,9 @@ class GatewayApp(WindowBase):
         self._quick_repair_state = load_quick_repair_state(
             BASE_DIR / "runtime" / "quick_repair.json"
         )
+        self._interface_preferences_path = BASE_DIR / "runtime" / "interface.json"
+        self._interface_preferences = load_interface_preferences(self._interface_preferences_path)
+        self._ui_mode = self._interface_preferences["mode"]
         self._model_import_in_progress = False
         self._comfy_starting_until = 0
         self._last_completed_outputs = []
@@ -1050,6 +1060,7 @@ class GatewayApp(WindowBase):
         self._current_task_text = "无任务"
 
         self._setup_style()
+        self._build_mode_switch(C, F)
         self._build_app_shell()
         self._build_sidebar()
         self._build_title_bar()
@@ -1063,6 +1074,8 @@ class GatewayApp(WindowBase):
         self._build_static_pages()
         self._build_footer()
         self._show_page("overview")
+        self._build_beginner_page()
+        self._set_interface_mode(self._ui_mode, persist=False)
 
         self.center()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1071,6 +1084,8 @@ class GatewayApp(WindowBase):
         # 异步启动序列
         if not self._runtime_start_blocked:
             self._request_backend_start("启动后台")
+        elif self._ui_mode == "beginner":
+            self.after(250, self._open_beginner_repair)
         self.after_idle(self._write_runtime_restart_ack)
         self.after(600, self._show_comfyui_recovery_result)
         self.after(800, self._show_runtime_update_result)
@@ -1342,6 +1357,7 @@ class GatewayApp(WindowBase):
             return False
         if not self._begin_backend_action(action_name):
             return False
+        self._beginner_backend_error = ""
         try:
             threading.Thread(
                 target=self._backend_start_worker,
@@ -1759,6 +1775,26 @@ class GatewayApp(WindowBase):
         ):
             return
         state = self._quick_repair_state
+        if self.__dict__.get("_ui_mode") == "beginner":
+            self._beginner_vram_mb = vram_mb
+            pending = state.get("pending_profile", "")
+            qwen_ready = self.__dict__.get("_startup_qwen_ready")
+            if qwen_ready is None:
+                qwen_ready = self._model_status.get("Qwen3.5") == "完整"
+            if (
+                not pending and environment_ready and qwen_ready
+            ):
+                self._refresh_beginner_view()
+                return
+            self._quick_repair_prompt_seen = True
+            profile = automatic_repair_profile(vram_mb, pending)
+            self.after(
+                250,
+                lambda: self._show_beginner_startup_repair(
+                    profile, vram_mb, pending, environment_ready, qwen_ready
+                ),
+            )
+            return
         pending = state.get("pending_profile")
         profile = pending or profile_for_vram(vram_mb)
         qwen_ready = self.__dict__.get("_startup_qwen_ready")
@@ -1785,7 +1821,10 @@ class GatewayApp(WindowBase):
         initial_profile: str | None = None,
         vram_mb: int = 0,
         auto_resume: bool = False,
+        simplified: bool | None = None,
     ):
+        if simplified is None:
+            simplified = self.__dict__.get("_ui_mode") == "beginner"
         existing = self._quick_repair_popup
         if existing is not None:
             try:
@@ -1798,30 +1837,35 @@ class GatewayApp(WindowBase):
         selected = initial_profile or self._quick_repair_state.get("pending_profile")
         if selected not in QUICK_REPAIR_PROFILES:
             selected = profile_for_vram(vram_mb)
+        if simplified:
+            selected = automatic_repair_profile(vram_mb, selected or "")
         popup = tk.Toplevel(self)
         popup.title("环境安装与修复")
         popup.configure(bg=C["bg"])
         popup.transient(self)
         popup.resizable(False, False)
-        self._center_popup(popup, 760, 680)
+        self._center_popup(popup, 760, 560 if simplified else 680)
         panel = self._card(popup, fill="both", expand=True, padx=12, pady=12)
         body = tk.Frame(panel, bg=C["card"])
         body.pack(fill="both", expand=True, padx=24, pady=(18, 14))
-        tk.Label(body, text="环境安装与修复", font=F["title"], fg=C["text"], bg=C["card"]).pack(anchor="w")
+        tk.Label(body, text="一键准备环境与模型" if simplified else "环境安装与修复", font=F["title"], fg=C["text"], bg=C["card"]).pack(anchor="w")
         tk.Label(
             body,
-            text="自动提示只检查运行环境和 Qwen3.5；点击一键修复后，可按所选档位补齐图文视频模型。",
+            text=("自动修复环境、下载默认图文视频模型并启动服务，无需填写配置。"
+                  if simplified else "自动提示只检查运行环境和 Qwen3.5；点击一键修复后，可按所选档位补齐图文视频模型。"),
             font=F["normal"], fg=C["text2"], bg=C["card"],
         ).pack(anchor="w", pady=(6, 14))
         detected = (
             f"检测到显存约 {vram_mb / 1024:.1f} GB，已自动选择档位"
             if vram_mb else "未能识别显存，请手动选择档位"
         )
-        tk.Label(body, text=detected, font=F["small"], fg=C["warn"], bg=C["card"]).pack(anchor="w", pady=(0, 12))
+        if not simplified:
+            tk.Label(body, text=detected, font=F["small"], fg=C["warn"], bg=C["card"]).pack(anchor="w", pady=(0, 12))
 
         profile_var = tk.StringVar(value=selected or "")
         cards = tk.Frame(body, bg=C["card"])
-        cards.pack(fill="x")
+        if not simplified:
+            cards.pack(fill="x")
         option_frames = {}
 
         def select_profile():
@@ -1848,6 +1892,11 @@ class GatewayApp(WindowBase):
                 fg=C["muted"], bg=C["card"],
             ).pack(anchor="w", padx=16, pady=(9, 13))
         select_profile()
+
+        size_var = tk.StringVar(value="正在计算环境与默认模型下载量…")
+        if simplified:
+            tk.Label(body, textvariable=size_var, font=F["small"], fg=C["text2"],
+                     bg=C["card"], justify="left", wraplength=680).pack(fill="x", pady=(0, 4))
 
         tk.Label(body, text="修复流程", font=F["h2"], fg=C["text"], bg=C["card"]).pack(anchor="w", pady=(22, 9))
         steps = tk.Frame(body, bg=C["soft_primary"])
@@ -1880,19 +1929,21 @@ class GatewayApp(WindowBase):
 
         footer = tk.Frame(panel, bg=C["card"])
         footer.pack(side="bottom", fill="x", padx=24, pady=(4, 18))
-        skip_var = tk.BooleanVar(value=bool(self._quick_repair_state.get("dismissed")))
+        skip_var = tk.BooleanVar(value=False if simplified else bool(self._quick_repair_state.get("dismissed")))
         skip_check = tk.Checkbutton(
             footer, text="下次不显示", variable=skip_var, font=F["normal"],
             fg=C["text2"], bg=C["card"], selectcolor=C["card"],
             activebackground=C["card"],
         )
-        skip_check.pack(side="left")
+        if not simplified:
+            skip_check.pack(side="left")
         start_button = self._button(footer, "一键修复", self._begin_quick_repair, "primary", width=125)
         start_button.pack(side="right", padx=(10, 0), ipady=5)
         cancel_button = self._button(footer, "取消", self._close_quick_repair_dialog, "plain", width=95)
         cancel_button.pack(side="right", ipady=5)
         popup.protocol("WM_DELETE_WINDOW", self._close_quick_repair_dialog)
-        popup.grab_set()
+        if not simplified:
+            popup.grab_set()
         self._quick_repair_popup = {
             "popup": popup,
             "profile_var": profile_var,
@@ -1903,8 +1954,33 @@ class GatewayApp(WindowBase):
             "start_button": start_button,
             "cancel_button": cancel_button,
             "option_frames": option_frames,
+            "simplified": simplified,
+            "size_var": size_var,
         }
-        if auto_resume:
+        if simplified:
+            dialog = self._quick_repair_popup
+            start_button.configure(state="disabled")
+            def estimate_download():
+                try:
+                    plan = beginner_download_plan(BASE_DIR, _models_dir(), selected, bool(self._environment_status.get("ready")))
+                    error = ""
+                except (OSError, ValueError) as exc:
+                    plan, error = None, str(exc)
+                def apply_estimate():
+                    if self._quick_repair_popup is not dialog:
+                        return
+                    if plan is None:
+                        size_var.set(f"无法计算下载量：{error}")
+                        return
+                    dialog["download_plan"] = plan
+                    size_var.set(beginner_download_summary(plan))
+                    start_button.configure(state="normal")
+                    if auto_resume:
+                        self._begin_quick_repair()
+                if not self._shutting_down:
+                    self.after(0, apply_estimate)
+            threading.Thread(target=estimate_download, daemon=True).start()
+        if auto_resume and not simplified:
             self.after(300, self._begin_quick_repair)
 
     def _close_quick_repair_dialog(self):
@@ -1930,6 +2006,7 @@ class GatewayApp(WindowBase):
         except (RuntimeError, tk.TclError):
             pass
         popup.destroy()
+        self._refresh_beginner_view()
 
     def _begin_quick_repair(self):
         dialog = self._quick_repair_popup
@@ -1974,7 +2051,9 @@ class GatewayApp(WindowBase):
             "hidden": None,
             "cancelled": threading.Event(),
             "model_retries": {},
+            "download_plan": dialog.get("download_plan"),
         }
+        self._refresh_beginner_view()
         if not self._environment_status.get("ready"):
             if (
                 self._environment_status.get("package_ready")
@@ -2044,7 +2123,8 @@ class GatewayApp(WindowBase):
         self._quick_repair_popup["status_var"].set(
             f"核对已有模型 {index}/{total}：{Path(name).name}"
         )
-        self._quick_repair_popup["progress_var"].set(3 + 7 * index / max(1, total))
+        if not run.get("download_plan"):
+            self._quick_repair_popup["progress_var"].set(3 + 7 * index / max(1, total))
 
     def _quick_repair_prepare_downloads(
         self, run: dict, missing: list[dict], invalid: list[Path]
@@ -2077,6 +2157,15 @@ class GatewayApp(WindowBase):
             self._quick_repair_fail(str(exc))
             return
         run.update(phase="models", controls=controls, hidden=hidden)
+        if run.get("download_plan"):
+            for control in controls:
+                target = Path(control["target"])
+                control["downloaded_bytes"] = bounded_file_size(target.with_name(target.name + ".part"), int(control["item"]["size_bytes"]))
+            owners = [self._model_download_owner(control) for control in controls]
+            done, percent = beginner_model_download_progress(run["download_plan"], owners)
+            self._quick_repair_popup["progress_var"].set(percent)
+            plan = dict(run["download_plan"], remaining_bytes=run["download_plan"]["total_bytes"] - done)
+            self._quick_repair_popup["size_var"].set(beginner_download_summary(plan))
         self._quick_repair_next_model(run)
 
     def _quick_repair_next_model(self, run: dict):
@@ -2125,9 +2214,15 @@ class GatewayApp(WindowBase):
         dialog = self._quick_repair_popup
         total = max(1, len(run["controls"]))
         percent = float(control.get("progress_percent") or 0)
-        dialog["progress_var"].set(10 + 75 * (run["index"] + percent / 100) / total)
+        overall = ""
+        if run.get("download_plan"):
+            done, weighted = beginner_model_download_progress(run["download_plan"], [self._model_download_owner(row) for row in run["controls"]])
+            dialog["progress_var"].set(weighted)
+            overall = f"总下载进度 {weighted:.1f}% · {done / 1024**3:.2f} / {run['download_plan']['total_bytes'] / 1024**3:.2f} GB\n"
+        else:
+            dialog["progress_var"].set(10 + 75 * (run["index"] + percent / 100) / total)
         dialog["status_var"].set(
-            f"下载模型 {run['index'] + 1}/{total}："
+            overall + f"下载模型 {run['index'] + 1}/{total}："
             f"{Path(control['item']['path']).name}\n"
             f"{control.get('status_text') or '正在连接下载源'}"
         )
@@ -2151,7 +2246,7 @@ class GatewayApp(WindowBase):
         run["phase"] = "verify"
         dialog = self._quick_repair_popup
         dialog["status_var"].set("模型文件已准备完毕，正在重启后台并核对图文视频工作流。")
-        dialog["progress_var"].set(88)
+        dialog["progress_var"].set(100 if run.get("download_plan") else 88)
         run.setdefault("verify_deadline", time.monotonic() + 180)
         if not self._restart_backend():
             if time.monotonic() >= run["verify_deadline"]:
@@ -2183,6 +2278,9 @@ class GatewayApp(WindowBase):
             dialog["status_var"].set("修复完成。文字、图片和视频工作流已通过服务端可用性检查。")
             dialog["start_button"].configure(state="normal", text="完成", command=self._close_quick_repair_dialog)
             dialog["cancel_button"].configure(text="关闭")
+            self._mark_beginner_prepared(run["profile"])
+            if dialog.get("simplified"):
+                self.after(750, lambda: self._close_completed_beginner_repair(run, dialog))
             return
         if fresh and online:
             missing_nodes = [
@@ -2218,6 +2316,7 @@ class GatewayApp(WindowBase):
                 if isinstance(child, tk.Radiobutton):
                     child.configure(state="normal")
         dialog["skip_check"].configure(state="normal")
+        self._refresh_beginner_view()
 
     # ══════════════════════════════════════════════════════
     # 顶栏：页面标题
@@ -4420,6 +4519,7 @@ class GatewayApp(WindowBase):
     def _update_model_download_progress(self, control: dict, percent: float, done: int, total: int):
         control = self._model_download_owner(control)
         control["progress_percent"] = float(percent)
+        control["downloaded_bytes"] = max(0, int(done))
         now = time.monotonic()
         sample = control.get("download_speed_sample")
         if sample is None or done < sample[1] or now - sample[0] > 30:
@@ -6527,6 +6627,11 @@ class GatewayApp(WindowBase):
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 target = cache_dir / RUNTIME_PACKAGE_NAME
                 sidecar = Path(f"{target}.sha256")
+                plan = None
+                pending = self.__dict__.get("_quick_repair_state", {}).get("pending_profile", "")
+                if auto_restart and self.__dict__.get("_ui_mode") == "beginner" and pending:
+                    plan = beginner_download_plan(BASE_DIR, _models_dir(), pending, False)
+                    self.after(0, lambda: self._attach_beginner_runtime_download(dialog, plan))
 
                 if target.is_file():
                     self.after(
@@ -6566,6 +6671,12 @@ class GatewayApp(WindowBase):
                     if not self._shutting_down:
                         self.after(0, lambda p=percent, s=stage, d=detail:
                                    self._set_runtime_progress(dialog, p, s, d))
+                        if plan:
+                            # Read actual retained bytes even when the downloader reports
+                            # a connection/switch stage with a synthetic zero percent.
+                            done = max(bounded_file_size(target, RUNTIME_PACKAGE_SIZE),
+                                       bounded_file_size(target.with_name(target.name + ".part"), RUNTIME_PACKAGE_SIZE))
+                            self.after(0, lambda count=done: self._update_beginner_runtime_download(dialog, plan, count))
 
                 download_runtime_package(
                     url, target,
@@ -7368,6 +7479,7 @@ class GatewayApp(WindowBase):
             valid = False
         self._local_url = value if valid else API_BASE
         self._local_url_label.config(text=self._local_url)
+        self._refresh_beginner_view()
 
     def _clear_public_url(self):
         self._tunnel_url = ""
@@ -7382,6 +7494,8 @@ class GatewayApp(WindowBase):
                 settings_label.config(text=masked)
             except Exception:
                 pass
+
+        self._refresh_beginner_view()
 
     def _copy_public_url(self):
         self._copy(self._tunnel_url)
@@ -8569,6 +8683,7 @@ class GatewayApp(WindowBase):
     def _report_backend_failure(self, message: str):
         if self._shutting_down:
             return
+        self._beginner_backend_error = message
         for key in ("comfyui", "api", "tunnel"):
             self._set_light(key, "offline", "重试可用")
         self._footer_label.config(text=f"  {message}")
@@ -9206,6 +9321,8 @@ class GatewayApp(WindowBase):
         url = data.get("base_url", "")
         tunnel_data = data.get("tunnel", {})
         comfy_data = data.get("comfyui", {})
+        if comfy_data.get("status") == "online":
+            self._beginner_backend_error = ""
 
         self._set_local_url(data.get("local_api") or self._local_url or API_BASE)
         if self.__dict__.get("_lan_url_label") is not None:
@@ -9257,6 +9374,7 @@ class GatewayApp(WindowBase):
         else:
             parts = ["公网连接未建立"]
         self._footer_label.config(text="  " + "  ".join(parts))
+        self._refresh_beginner_view()
 
     def _tunnel_error_label(self, error: str) -> str:
         text = str(error or "").strip()
@@ -9304,6 +9422,7 @@ class GatewayApp(WindowBase):
                     retry_btn.pack(side="left", padx=(4, 0))
             elif retry_btn.winfo_ismapped():
                 retry_btn.pack_forget()
+        self._refresh_beginner_view()
 
     def _retry_component(self, key: str):
         if self._shutting_down:
